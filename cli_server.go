@@ -22,6 +22,7 @@ func InitConfigServer() *utils.GlobalConfig {
 	sflag.UintVar(&gcfg.PauseSecond, "pausesecond", 0, "pause such period after each speed job (seconds)")
 	sflag.BoolVar(&gcfg.MiaoKoSignedTLS, "mtls", false, "enable miaoko certs for tls verification")
 	sflag.BoolVar(&gcfg.NoSpeedFlag, "nospeed", false, "decline all speedtest requests")
+	sflag.BoolVar(&gcfg.EnableIPv6, "ipv6", false, "enable ipv6 support")
 	sflag.StringVar(&gcfg.MaxmindDB, "mmdb", "", "reroute all geoip query to local mmdbs. for example: test.mmdb,testcity.mmdb")
 	path := sflag.String("path", "", "specific websocket path you want, default '/'")
 	allowIP := sflag.String("allowip", "0.0.0.0/0,::/0", "allow ip range, can be format like 192.168.1.0/24,10.12.13.2")
@@ -35,8 +36,8 @@ func InitConfigServer() *utils.GlobalConfig {
 		gcfg.WhiteList = strings.Split(*whiteList, ",")
 	}
 	if *allowIP != "" {
-		if *allowIP == "0.0.0.0/0" {
-			utils.DWarnf("MiaoSpeed Server | allow ip range is set to 0.0.0.0/0, which means any ip can access this server, please use it with caution")
+		if *allowIP == "0.0.0.0/0,::/0" {
+			utils.DWarnf("MiaoSpeed Server | allow ip range is set to 0.0.0.0/0,::/0, which means any ip (full stack) can access this server, please use it with caution")
 		}
 		gcfg.AllowIPs = strings.Split(*allowIP, ",")
 	}
@@ -50,7 +51,7 @@ func InitConfigServer() *utils.GlobalConfig {
 		gcfg.Path = "/"
 	}
 	if gcfg.Path == "/" {
-		utils.DWarnf("MiaoSpeed Server Warning | using an unsafe websocket connection path: %s", gcfg.Path)
+		utils.DWarnf("MiaoSpeed Server | using an unsafe websocket connection path: %s", gcfg.Path)
 	} else {
 		utils.DWarnf("MiaoSpeed Server | using a custom websocket connection path: %s", gcfg.Path)
 	}
