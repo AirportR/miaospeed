@@ -35,6 +35,9 @@ type SDRTTDS struct {
 type SDHTTPDS struct {
 	Value float64
 }
+type PacketLossDS struct {
+	Value float64
+}
 
 type PerSecondSpeedDS struct {
 	Max     uint64

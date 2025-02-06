@@ -18,13 +18,15 @@ const (
 	Hysteria2 ProxyType = "Hysteria2"
 	TUIC      ProxyType = "TUIC"
 	Wireguard ProxyType = "Wireguard"
+	SSH       ProxyType = "SSH"
+	Mieru     ProxyType = "Mieru"
 
 	ProxyInvalid ProxyType = "Invalid"
 )
 
 var AllProxyTypes = []ProxyType{
 	Shadowsocks, ShadowsocksR, Snell, Socks5, Http, Vmess, Trojan,
-	Vless, Hysteria, Hysteria2, TUIC, Wireguard,
+	Vless, Hysteria, Hysteria2, TUIC, Wireguard, SSH, Mieru,
 }
 
 func Valid(proxyType ProxyType) bool {

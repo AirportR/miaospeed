@@ -14,6 +14,8 @@ type Ping struct {
 	RTTList     []uint16
 	RequestList []uint16
 	StatusCodes []int
+	PacketLoss  float64
+	Jitter      float64
 }
 
 func (m *Ping) Type() interfaces.SlaveRequestMacroType {
