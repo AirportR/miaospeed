@@ -107,25 +107,32 @@ func pingViaNetCat(ctx context.Context, p interfaces.Vendor, url string) (uint16
 	}
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(6 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(6 * time.Second))
 	reader := bufio.NewReader(conn)
 
 	if _, err := conn.Write([]byte(payload)); err != nil {
-		return 0, 0, 0, fmt.Errorf("write failed: %w", err)
+		return 0, 0, 0, fmt.Errorf("write failed 1: %w", err)
 	}
-	reader.ReadByte() // Flush buffer
-
-	httpStart := time.Now()
+	_, _ = reader.ReadByte() // Flush buffer
+	connRTT := time.Since(connStart).Milliseconds()
+	//_, _, _ = reader.ReadLine()
+	for reader.Buffered() > 0 {
+		_, _, _ = reader.ReadLine()
+	}
+	tcpStart := time.Now()
 	if _, err := conn.Write([]byte(payload)); err != nil {
-		return 0, 0, 0, fmt.Errorf("write failed: %w", err)
+		return 0, 0, 0, fmt.Errorf("write failed 2: %w", err)
 	}
 	if _, err := reader.Peek(1); err != nil {
-		return 0, 0, 0, fmt.Errorf("read failed: %w", err)
+		return 0, 0, 0, fmt.Errorf("read failed 3: %w", err)
 	}
 
-	rtt := time.Since(httpStart).Milliseconds()
-	statusCode, _ := saferParseHTTPStatus(reader)
-	return uint16(rtt), uint16(time.Since(connStart).Milliseconds()), statusCode, nil
+	tcpRTT := time.Since(tcpStart).Milliseconds()
+	statusCode, err := saferParseHTTPStatus(reader)
+	if err != nil {
+		return uint16(tcpRTT), 0, 0, nil
+	}
+	return uint16(tcpRTT), uint16(connRTT), statusCode, nil
 }
 
 func ping(obj *Ping, p interfaces.Vendor, url string, withAvg uint16, timeout uint) {
@@ -147,6 +154,7 @@ func ping(obj *Ping, p interfaces.Vendor, url string, withAvg uint16, timeout ui
 		cancel()
 
 		if err != nil {
+			//utils.DLogf("ping failed: %v", err)
 			failedAttempt++
 			continue
 		}
