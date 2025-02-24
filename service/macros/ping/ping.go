@@ -98,7 +98,11 @@ func pingViaTrace(ctx context.Context, p interfaces.Vendor, url string) (uint16,
 
 func pingViaNetCat(ctx context.Context, p interfaces.Vendor, url string) (uint16, uint16, int, error) {
 	purl, _ := urllib.Parse(url)
-	payload := structs.X(preconfigs.NETCAT_HTTP_PAYLOAD, purl.EscapedPath()+"?"+purl.Query().Encode(), purl.Hostname(), utils.VERSION)
+	path := purl.EscapedPath()
+	if purl.RawQuery != "" {
+		path += "?" + purl.Query().Encode()
+	}
+	payload := structs.X(preconfigs.NETCAT_HTTP_PAYLOAD, path, purl.Hostname(), utils.VERSION)
 
 	connStart := time.Now()
 	conn, err := p.DialTCP(ctx, url, interfaces.ROptionsTCP)
@@ -109,26 +113,32 @@ func pingViaNetCat(ctx context.Context, p interfaces.Vendor, url string) (uint16
 
 	_ = conn.SetDeadline(time.Now().Add(6 * time.Second))
 	reader := bufio.NewReader(conn)
-
+	tcpStart := time.Now()
 	if _, err := conn.Write([]byte(payload)); err != nil {
 		return 0, 0, 0, fmt.Errorf("write failed 1: %w", err)
 	}
-	_, _ = reader.ReadByte() // Flush buffer
+
+	_, _ = reader.Peek(1) // Flush buffer
+	tcpRTT := time.Since(tcpStart).Milliseconds()
 	connRTT := time.Since(connStart).Milliseconds()
+	statusCode, err := saferParseHTTPStatus(reader)
 	//_, _, _ = reader.ReadLine()
 	for reader.Buffered() > 0 {
 		_, _, _ = reader.ReadLine()
 	}
-	tcpStart := time.Now()
+	tcpStart = time.Now()
 	if _, err := conn.Write([]byte(payload)); err != nil {
 		return 0, 0, 0, fmt.Errorf("write failed 2: %w", err)
 	}
 	if _, err := reader.Peek(1); err != nil {
-		return 0, 0, 0, fmt.Errorf("read failed 3: %w", err)
+		if err == io.EOF {
+			return uint16(tcpRTT), uint16(connRTT), statusCode, nil
+		}
+		return 0, 0, 0, fmt.Errorf("read failed 2: %w", err)
 	}
-
-	tcpRTT := time.Since(tcpStart).Milliseconds()
-	statusCode, err := saferParseHTTPStatus(reader)
+	// resend the request to get the RTT of the second request
+	tcpRTT = time.Since(tcpStart).Milliseconds()
+	statusCode, err = saferParseHTTPStatus(reader)
 	if err != nil {
 		return uint16(tcpRTT), 0, 0, nil
 	}
@@ -154,7 +164,7 @@ func ping(obj *Ping, p interfaces.Vendor, url string, withAvg uint16, timeout ui
 		cancel()
 
 		if err != nil {
-			//utils.DLogf("ping failed: %v", err)
+			utils.DLogf("ping failed: %v", err)
 			failedAttempt++
 			continue
 		}

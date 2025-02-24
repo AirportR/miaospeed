@@ -42,7 +42,7 @@ func (c *stunServerConn) Close() error {
 
 const (
 	messageHeaderSize = 20
-	natTimeout        = 3
+	natTimeout        = 5
 )
 
 var (
