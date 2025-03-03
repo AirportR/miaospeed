@@ -40,7 +40,7 @@ func saferParseHTTPStatus(reader *bufio.Reader) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	//defer resp.Body.Close()
 
 	return resp.StatusCode, nil
 }
@@ -134,7 +134,8 @@ func pingViaNetCat(ctx context.Context, p interfaces.Vendor, url string) (uint16
 		if err == io.EOF {
 			return uint16(tcpRTT), uint16(connRTT), statusCode, nil
 		}
-		return 0, 0, 0, fmt.Errorf("read failed 2: %w", err)
+
+		return uint16(tcpRTT), uint16(connRTT), statusCode, fmt.Errorf("read failed 2: %w", err)
 	}
 	// resend the request to get the RTT of the second request
 	tcpRTT = time.Since(tcpStart).Milliseconds()
@@ -164,7 +165,7 @@ func ping(obj *Ping, p interfaces.Vendor, url string, withAvg uint16, timeout ui
 		cancel()
 
 		if err != nil {
-			utils.DLogf("ping failed: %v", err)
+			//utils.DLogf("ping failed: %v", err)
 			failedAttempt++
 			continue
 		}
