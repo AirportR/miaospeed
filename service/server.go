@@ -26,7 +26,7 @@ type WsHandler struct {
 
 func (wh *WsHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	//show simple forbidden text
+	// show simple forbidden text
 	if !wh.IPFilter.Allowed(ip) {
 		http.Error(rw, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return
@@ -89,7 +89,7 @@ func InitServer() {
 					// unsafe, ensure jsoniter package receives frequently security updates.
 					err = jsoniter.NewDecoder(r2).Decode(&sr)
 					// 原方案
-					//err = json.NewDecoder(r).Decode(&sr)
+					// err = json.NewDecoder(r).Decode(&sr)
 					if err == io.EOF {
 						// One value is expected in the message.
 						err = io.ErrUnexpectedEOF
@@ -122,7 +122,7 @@ func InitServer() {
 				}
 
 				// find all matrices
-				mtrx := matrices.FindBatchFromEntry(sr.Options.Matrices)
+				mtrx, extra := matrices.FindBatchFromEntry(sr.Options.Matrices, sr.Configs.Scripts)
 
 				// extra macro from the matrices
 				macros := ExtractMacrosFromMatrices(mtrx)
@@ -136,13 +136,13 @@ func InitServer() {
 						return
 					}
 					poll = SpeedTaskPoll
-					//awaitingCount := uint(poll.AwaitingCount())
-					//if awaitingCount > utils.GCFG.TaskLimit {
+					// awaitingCount := uint(poll.AwaitingCount())
+					// if awaitingCount > utils.GCFG.TaskLimit {
 					//	_ = conn.WriteJSON(&interfaces.SlaveResponse{
 					//		Error: fmt.Sprintf("too many tasks are waiting, please try later, current queuing=%d", awaitingCount),
 					//	})
 					//	return
-					//}
+					// }
 				} else {
 					poll = ConnTaskPoll
 				}
@@ -151,11 +151,12 @@ func InitServer() {
 
 				// build testing item
 				item := poll.Push((&TestingPollItem{
-					id:       utils.RandomUUID(),
-					name:     sr.Basics.ID,
-					request:  &sr,
-					matrices: sr.Options.Matrices,
-					macros:   macros,
+					id:            utils.RandomUUID(),
+					name:          sr.Basics.ID,
+					request:       &sr,
+					matrices:      sr.Options.Matrices,
+					matricesExtra: extra,
+					macros:        macros,
 					onProcess: func(self *TestingPollItem, idx int, result interfaces.SlaveEntrySlot) {
 						_ = conn.WriteJSON(&interfaces.SlaveResponse{
 							ID:               self.ID(),

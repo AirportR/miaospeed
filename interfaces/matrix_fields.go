@@ -69,3 +69,8 @@ type InboundGeoIPDS struct {
 type OutboundGeoIPDS struct {
 	MultiStacks
 }
+
+type HijackDS struct {
+	SpeedIP string
+	RealIP  string
+}

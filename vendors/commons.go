@@ -3,6 +3,7 @@ package vendors
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -51,6 +52,12 @@ func RequestUnsafe(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.
 	}
 	req = req.WithContext(ctx)
 
+	tlsConf := tls.Config{}
+
+	if reqOpt.SNI != "" {
+		tlsConf.ServerName = reqOpt.SNI
+	}
+
 	// connect proxy bridge
 	// init params copied from http.DefaultTransport
 	transport := &http.Transport{
@@ -58,10 +65,14 @@ func RequestUnsafe(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.
 		IdleConnTimeout:       10 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig:       &tlsConf,
 	}
 
 	if p != nil {
 		transport.Dial = func(string, string) (net.Conn, error) {
+			if reqOpt.SNI != "" {
+				return p.DialTCP(ctx, "https://"+reqOpt.SNI, reqOpt.Network)
+			}
 			return p.DialTCP(ctx, reqOpt.URL, reqOpt.Network)
 		}
 	} else {

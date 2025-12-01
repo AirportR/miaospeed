@@ -30,4 +30,5 @@ type RequestOptions struct {
 	Body    []byte
 	NoRedir bool
 	Network RequestOptionsNetwork
+	SNI     string
 }

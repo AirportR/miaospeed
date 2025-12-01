@@ -77,8 +77,24 @@ func FindBatch(macroTypes []interfaces.SlaveRequestMatrixType) []interfaces.Slav
 	})
 }
 
-func FindBatchFromEntry(macroTypes []interfaces.SlaveRequestMatrixEntry) []interfaces.SlaveRequestMatrix {
-	return structs.Map(macroTypes, func(m interfaces.SlaveRequestMatrixEntry) interfaces.SlaveRequestMatrix {
+func FindBatchFromEntry(macroTypes []interfaces.SlaveRequestMatrixEntry, scripts []interfaces.Script) ([]interfaces.SlaveRequestMatrix, map[string]interfaces.SlaveRequestMatrixEntry) {
+	extras := make(map[string]interfaces.SlaveRequestMatrixEntry)
+
+	matrices := structs.Map(macroTypes, func(m interfaces.SlaveRequestMatrixEntry) interfaces.SlaveRequestMatrix {
+		if m.Type == interfaces.MatrixScriptTest {
+			if script := structs.Find(scripts, func(s interfaces.Script) bool { return s.ID == m.Params }); script != nil {
+				entry, ok := ExecExtraMatriceExtract(script.Content)
+				if ok {
+					extras[m.Params] = entry
+					return Find(entry.Type)
+				}
+				return Find(m.Type)
+			}
+			return &invalid.Invalid{}
+		}
+
 		return Find(m.Type)
 	})
+
+	return matrices, extras
 }

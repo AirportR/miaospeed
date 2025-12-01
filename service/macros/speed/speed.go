@@ -95,8 +95,15 @@ func SingleThread(downloadFiles []string, proxy interfaces.Vendor, timeoutSecond
 			}
 			// download file
 			file := downloadFilesCopy[i%fileLen]
+
+			sni := ""
+			if strings.Contains(file, "dl.google.com") {
+				sni = "www.google.com"
+			}
+
 			resp, _, err := vendors.RequestUnsafe(ctx, proxy, &interfaces.RequestOptions{
 				URL: file,
+				SNI: sni,
 			})
 
 			if !isReady {
@@ -129,23 +136,14 @@ func SingleThread(downloadFiles []string, proxy interfaces.Vendor, timeoutSecond
 }
 
 func RefetchDownloadFiles(proxy interfaces.Vendor, file string) []string {
-	defaultList := []string{preconfigs.SPEED_DEFAULT_LARGE_FILE_STATIC_MSFT}
+	defaultList := []string{preconfigs.SPEED_DEFAULT_LARGE_FILE_STATIC_GOOGLE}
 	if proxy == nil || proxy.Status() == interfaces.VStatusNotReady {
 		return defaultList
 	}
 
 	switch file {
 	case preconfigs.SPEED_DEFAULT_LARGE_FILE_DYN_INTL:
-		body, _, _ := vendors.RequestWithRetry(proxy, 1, 1000, &interfaces.RequestOptions{
-			URL:     "https://ipinfo.io",
-			NoRedir: true,
-		})
-
-		if strings.Contains(string(body), "Microsoft") {
-			return []string{preconfigs.SPEED_DEFAULT_LARGE_FILE_STATIC_MSFT}
-		} else {
-			return []string{preconfigs.SPEED_DEFAULT_LARGE_FILE_STATIC_GOOGLE}
-		}
+		return []string{preconfigs.SPEED_DEFAULT_LARGE_FILE_STATIC_GOOGLE}
 	case preconfigs.SPEED_DEFAULT_LARGE_FILE_DYN_FAST:
 		body, _, _ := vendors.RequestWithRetry(proxy, 3, 1000, &interfaces.RequestOptions{
 			URL:     "https://api.fast.com/netflix/speedtest/v2?https=false&token=YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm&urlCount=5",

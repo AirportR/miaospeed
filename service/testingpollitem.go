@@ -1,6 +1,9 @@
 package service
 
 import (
+	"github.com/airportr/miaospeed/engine"
+	"github.com/airportr/miaospeed/engine/helpers"
+	"runtime"
 	"sync"
 	"time"
 
@@ -18,10 +21,11 @@ type TestingPollItem struct {
 	id   string
 	name string
 
-	request  *interfaces.SlaveRequest
-	matrices []interfaces.SlaveRequestMatrixEntry
-	macros   []interfaces.SlaveRequestMacroType
-	results  *structs.AsyncArr[interfaces.SlaveEntrySlot]
+	request       *interfaces.SlaveRequest
+	matrices      []interfaces.SlaveRequestMatrixEntry
+	matricesExtra map[string]interfaces.SlaveRequestMatrixEntry
+	macros        []interfaces.SlaveRequestMacroType
+	results       *structs.AsyncArr[interfaces.SlaveEntrySlot]
 
 	onProcess  func(self *TestingPollItem, idx int, result interfaces.SlaveEntrySlot)
 	onExit     func(self *TestingPollItem, exitCode taskpoll.TPExitCode)
@@ -64,7 +68,7 @@ func (tpi *TestingPollItem) Yield(idx int, tpc *taskpoll.TPController) {
 		tpi.results.Push(result)
 		tpi.onProcessLock.Lock()
 		defer tpi.onProcessLock.Unlock()
-		//utils.DWarnf("Task yield idx %d, tpc: %s", idx, tpc.Name())
+		// utils.DWarnf("Task yield idx %d, tpc: %s", idx, tpc.Name())
 		tpi.onProcess(tpi, idx, result)
 	}()
 
@@ -91,6 +95,22 @@ func (tpi *TestingPollItem) Yield(idx int, tpc *taskpoll.TPController) {
 
 	result.Matrices = structs.Map(tpi.matrices, func(me interfaces.SlaveRequestMatrixEntry) interfaces.MatrixResponse {
 		m := matrices.Find(me.Type)
+		if m.Type() == interfaces.MatrixScriptTest {
+			if entry, ok := tpi.matricesExtra[me.Params]; ok {
+				m := matrices.Find(entry.Type)
+				macro := macroMap.MustGet(m.MacroJob())
+				if macro == nil {
+					macro = &invalid.Invalid{}
+				}
+				m.Extract(entry, macro)
+
+				scriptResult := formatExtraMatriceScriptResult(entry.Params, m)
+				return interfaces.MatrixResponse{
+					Type:    interfaces.MatrixScriptTest,
+					Payload: utils.ToJSON(&interfaces.ScriptTestDS{Key: me.Params, ScriptResult: scriptResult}),
+				}
+			}
+		}
 		macro := macroMap.MustGet(m.MacroJob())
 		if macro == nil {
 			macro = &invalid.Invalid{}
@@ -113,4 +133,37 @@ func (tpi *TestingPollItem) OnExit(exitCode taskpoll.TPExitCode) {
 func (tpi *TestingPollItem) Init() taskpoll.TaskPollItem {
 	tpi.results = structs.NewAsyncArr[interfaces.SlaveEntrySlot]()
 	return tpi
+}
+
+func formatExtraMatriceScriptResult(script string, matrix interfaces.SlaveRequestMatrix) interfaces.ScriptResult {
+	s := interfaces.ScriptResult{}
+	if script == "" || matrix == nil {
+		return s
+	}
+
+	vm := engine.VMNew()
+
+	vm.RunString(engine.PREDEFINED_SCRIPT + script)
+	ret, err := engine.ExecTaskCallback(vm, "matrice_formatter", matrix)
+
+	if engine.ThrowExecTaskErr("Extra Matrice Format", err) {
+		// nothing here
+	} else if text, ok := helpers.VMSafeStr(ret); ok {
+		s.Text = text
+	} else if ro, _ := helpers.VMSafeObj(vm, ret); ro != nil {
+		if v, ok := helpers.VMSafeStr(ro.Get("text")); ok {
+			s.Text = v
+		}
+		if v, ok := helpers.VMSafeStr(ro.Get("color")); ok {
+			s.Color = v
+		}
+		if v, ok := helpers.VMSafeStr(ro.Get("background")); ok {
+			s.Background = v
+		}
+	}
+
+	vm = nil
+	runtime.GC()
+
+	return s
 }

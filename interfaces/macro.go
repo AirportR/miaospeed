@@ -11,6 +11,7 @@ const (
 	MacroGeo     SlaveRequestMacroType = "GEO"
 	MacroSleep   SlaveRequestMacroType = "SLEEP"
 	MacroInvalid SlaveRequestMacroType = "INVALID"
+	MacroHijack  SlaveRequestMacroType = "HIJACK"
 )
 
 // Macro is the atom runner for a job. Since some matrices

@@ -56,6 +56,16 @@ func FilterMap[K Hashable, T any](source map[K]T, mapper func(K, T) bool) map[K]
 	return result
 }
 
+func Find[T any](source []T, mapper func(T) bool) *T {
+	for i := range source {
+		if mapper(source[i]) {
+			return &source[i]
+		}
+	}
+
+	return nil
+}
+
 func Index[T any](source []T, mapper func(T) bool) int {
 	for i := range source {
 		if mapper(source[i]) {
