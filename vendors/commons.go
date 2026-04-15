@@ -10,12 +10,75 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"reflect"
+	"sync"
 	"time"
 
 	"github.com/airportr/miaospeed/interfaces"
 	"github.com/airportr/miaospeed/utils"
 	"github.com/airportr/miaospeed/utils/structs"
 )
+
+type requestTransportCacheKey struct {
+	vendorRef string
+	network   interfaces.RequestOptionsNetwork
+	sni       string
+}
+
+var requestTransportCache sync.Map
+
+func vendorReference(p interfaces.Vendor) string {
+	if p == nil {
+		return "<nil>"
+	}
+
+	rv := reflect.ValueOf(p)
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return fmt.Sprintf("%T@<nil>", p)
+		}
+		return fmt.Sprintf("%T@%x", p, rv.Pointer())
+	}
+
+	return fmt.Sprintf("%T@%v", p, p.ProxyInfo())
+}
+
+func getOrInitTransport(p interfaces.Vendor, network interfaces.RequestOptionsNetwork, sni string) *http.Transport {
+	key := requestTransportCacheKey{
+		vendorRef: vendorReference(p),
+		network:   network,
+		sni:       sni,
+	}
+	if cached, ok := requestTransportCache.Load(key); ok {
+		if transport, ok := cached.(*http.Transport); ok && transport != nil {
+			return transport
+		}
+	}
+
+	transport := &http.Transport{
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   100,
+		IdleConnTimeout:       10 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	if sni != "" {
+		transport.TLSClientConfig = &tls.Config{ServerName: sni}
+	}
+
+	transport.DialContext = func(reqCtx context.Context, _ string, addr string) (net.Conn, error) {
+		if p != nil {
+			return p.DialTCP(reqCtx, formatDialAddressToURL(addr), network)
+		}
+		return utils.DialContext(reqCtx, network.String(), addr)
+	}
+
+	actual, _ := requestTransportCache.LoadOrStore(key, transport)
+	if cached, ok := actual.(*http.Transport); ok && cached != nil {
+		return cached
+	}
+	return transport
+}
 
 // for all methods in commons
 // if proxy is nil, fallback to system
@@ -55,31 +118,7 @@ func RequestUnsafe(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.
 	}
 	req = req.WithContext(ctx)
 
-	tlsConf := tls.Config{}
-
-	if reqOpt.SNI != "" {
-		tlsConf.ServerName = reqOpt.SNI
-	}
-
-	// connect proxy bridge
-	// init params copied from http.DefaultTransport
-	transport := &http.Transport{
-		MaxIdleConns:          100,
-		IdleConnTimeout:       10 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig:       &tlsConf,
-	}
-
-	transport.DialContext = func(reqCtx context.Context, _ string, addr string) (net.Conn, error) {
-		if reqCtx == nil {
-			reqCtx = ctx
-		}
-		if p != nil {
-			return p.DialTCP(reqCtx, formatDialAddressToURL(addr), reqOpt.Network)
-		}
-		return utils.DialContext(reqCtx, reqOpt.Network.String(), addr)
-	}
+	transport := getOrInitTransport(p, reqOpt.Network, reqOpt.SNI)
 
 	// make a list to record all redirects
 	// the maximum count of redirection is 64
