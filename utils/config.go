@@ -8,6 +8,7 @@ import (
 type GlobalConfig struct {
 	Token                 string
 	Binder                string
+	PprofBinder           string
 	NetworkInterface      string
 	WhiteList             []string
 	AllowIPs              []string

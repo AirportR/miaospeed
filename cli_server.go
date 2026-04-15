@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"strings"
 
@@ -18,6 +20,7 @@ func InitConfigServer() *utils.GlobalConfig {
 	sflag := flag.NewFlagSet(cmdName+" server", flag.ExitOnError)
 	sflag.StringVar(&gcfg.Token, "token", "", "specify the token used to sign request")
 	sflag.StringVar(&gcfg.Binder, "bind", "", "bind a socket, can be format like 0.0.0.0:8080 or /tmp/unix_socket")
+	sflag.StringVar(&gcfg.PprofBinder, "pprof", "", "enable pprof server, bind address format like 127.0.0.1:6060")
 	sflag.UintVar(&gcfg.ConnTaskTreading, "connthread", 64, "parallel threads when processing normal connectivity tasks")
 	sflag.UintVar(&gcfg.TaskLimit, "tasklimit", 1000, "limit of tasks in queue, default with 1000")
 	sflag.Uint64Var(&gcfg.SpeedLimit, "speedlimit", 0, "speed ratelimit (in Bytes per Second), default with no limits")
@@ -108,6 +111,7 @@ func RunCliServer() {
 
 	// start task server
 	go service.StartTaskServer()
+	startPprofServer()
 
 	// start api server
 	service.CleanUpServer()
@@ -118,4 +122,18 @@ func RunCliServer() {
 	// clean up
 	service.CleanUpServer()
 	utils.DLog("Shutting down.")
+}
+
+func startPprofServer() {
+	pprofBind := strings.TrimSpace(utils.GCFG.PprofBinder)
+	if pprofBind == "" {
+		return
+	}
+
+	go func() {
+		utils.DWarnf("MiaoSpeed PProf | Start Listening, bind=%s", pprofBind)
+		if err := http.ListenAndServe(pprofBind, nil); err != nil {
+			utils.DErrorf("MiaoSpeed PProf | Cannot serve on socket %s, error=%s", pprofBind, err.Error())
+		}
+	}()
 }
