@@ -145,6 +145,22 @@ func (tpc *TPController) Start() {
 	if waitDuration <= 0 {
 		waitDuration = 200 * time.Millisecond
 	}
+	idleTimer := time.NewTimer(waitDuration)
+	if !idleTimer.Stop() {
+		select {
+		case <-idleTimer.C:
+		default:
+		}
+	}
+	drainTimer := func() {
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+	}
+	defer drainTimer()
 
 	for {
 		select {
@@ -152,27 +168,31 @@ func (tpc *TPController) Start() {
 			utils.DLog("task server shutted down.")
 			return
 		default:
-			if itemIdx, tpw := tpc.populate(); tpw != nil {
-				utils.DLogf("Task Poll | Task Populate, poll=%s type=%s id=%s index=%v", tpc.name, tpw.TaskName(), tpw.ID(), itemIdx)
-				go func() {
-					defer func() {
-						_ = utils.WrapErrorPure("Task population err", recover())
-						tpc.release(tpw)
-					}()
-					tpw.Yield(itemIdx, tpc)
+		}
+		if itemIdx, tpw := tpc.populate(); tpw != nil {
+			utils.DLogf("Task Poll | Task Populate, poll=%s type=%s id=%s index=%v", tpc.name, tpw.TaskName(), tpw.ID(), itemIdx)
+			go func() {
+				defer func() {
+					_ = utils.WrapErrorPure("Task population err", recover())
+					tpc.release(tpw)
 				}()
-				if tpc.interval > 0 {
-					time.Sleep(tpc.interval)
-				}
-			} else {
-				select {
-				case <-sigTerm:
-					utils.DLog("task server shutted down.")
-					return
-				case <-tpc.wakeCh:
-				case <-time.After(waitDuration):
-				}
+				tpw.Yield(itemIdx, tpc)
+			}()
+			if tpc.interval > 0 {
+				time.Sleep(tpc.interval)
 			}
+			continue
+		}
+
+		drainTimer()
+		idleTimer.Reset(waitDuration)
+		select {
+		case <-sigTerm:
+			utils.DLog("task server shutted down.")
+			return
+		case <-tpc.wakeCh:
+			drainTimer()
+		case <-idleTimer.C:
 		}
 	}
 }

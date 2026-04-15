@@ -4,6 +4,8 @@ goreleaser*
 # built artifacts
 miaoko
 miaospeed
+bin/
+/*.exe
 dist
 *.tgz
 *.dev.sh
