@@ -65,7 +65,7 @@ func SignRequest(token string, req *interfaces.SlaveRequest) string {
 		awaitSignedStr, _ := jsoniter.MarshalToString(&awaitSigned)
 		awaitSignedStr = strings.TrimSpace(awaitSignedStr)
 		return hashMiaoSpeed(token, awaitSignedStr)
-	} else {
-		return RandomUUID() // 不应该执行到此分支
 	}
+
+	return RandomUUID() // 不应该执行到此分支
 }
