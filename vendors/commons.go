@@ -2,6 +2,7 @@ package vendors
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -19,13 +20,83 @@ import (
 	"github.com/airportr/miaospeed/utils/structs"
 )
 
+const requestTransportCacheLimit = 128
+
 type requestTransportCacheKey struct {
 	vendorRef string
 	network   interfaces.RequestOptionsNetwork
 	sni       string
 }
 
-var requestTransportCache sync.Map
+type requestTransportCacheEntry struct {
+	key       requestTransportCacheKey
+	transport *http.Transport
+}
+
+type requestTransportLRU struct {
+	lock       sync.Mutex
+	entries    map[requestTransportCacheKey]*list.Element
+	lru        *list.List
+	maxEntries int
+}
+
+func newRequestTransportLRU(maxEntries int) *requestTransportLRU {
+	if maxEntries <= 0 {
+		maxEntries = 1
+	}
+
+	return &requestTransportLRU{
+		entries:    make(map[requestTransportCacheKey]*list.Element),
+		lru:        list.New(),
+		maxEntries: maxEntries,
+	}
+}
+
+func (c *requestTransportLRU) getOrInit(key requestTransportCacheKey, init func() *http.Transport) *http.Transport {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	if ele, ok := c.entries[key]; ok {
+		c.lru.MoveToFront(ele)
+		if entry, ok := ele.Value.(*requestTransportCacheEntry); ok && entry != nil && entry.transport != nil {
+			return entry.transport
+		}
+	}
+
+	transport := init()
+	entry := &requestTransportCacheEntry{
+		key:       key,
+		transport: transport,
+	}
+	ele := c.lru.PushFront(entry)
+	c.entries[key] = ele
+
+	for len(c.entries) > c.maxEntries {
+		c.removeOldestLocked()
+	}
+
+	return transport
+}
+
+func (c *requestTransportLRU) removeOldestLocked() {
+	ele := c.lru.Back()
+	if ele == nil {
+		return
+	}
+
+	c.lru.Remove(ele)
+	entry, ok := ele.Value.(*requestTransportCacheEntry)
+	if !ok || entry == nil {
+		return
+	}
+
+	delete(c.entries, entry.key)
+	if entry.transport != nil {
+		entry.transport.CloseIdleConnections()
+	}
+}
+
+var requestTransportCache = newRequestTransportLRU(requestTransportCacheLimit)
 
 func vendorReference(p interfaces.Vendor) string {
 	if p == nil {
@@ -49,35 +120,28 @@ func getOrInitTransport(p interfaces.Vendor, network interfaces.RequestOptionsNe
 		network:   network,
 		sni:       sni,
 	}
-	if cached, ok := requestTransportCache.Load(key); ok {
-		if transport, ok := cached.(*http.Transport); ok && transport != nil {
-			return transport
+
+	return requestTransportCache.getOrInit(key, func() *http.Transport {
+		transport := &http.Transport{
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   100,
+			IdleConnTimeout:       10 * time.Second,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
 		}
-	}
-
-	transport := &http.Transport{
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   100,
-		IdleConnTimeout:       10 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-	if sni != "" {
-		transport.TLSClientConfig = &tls.Config{ServerName: sni}
-	}
-
-	transport.DialContext = func(reqCtx context.Context, _ string, addr string) (net.Conn, error) {
-		if p != nil {
-			return p.DialTCP(reqCtx, formatDialAddressToURL(addr), network)
+		if sni != "" {
+			transport.TLSClientConfig = &tls.Config{ServerName: sni}
 		}
-		return utils.DialContext(reqCtx, network.String(), addr)
-	}
 
-	actual, _ := requestTransportCache.LoadOrStore(key, transport)
-	if cached, ok := actual.(*http.Transport); ok && cached != nil {
-		return cached
-	}
-	return transport
+		transport.DialContext = func(reqCtx context.Context, _ string, addr string) (net.Conn, error) {
+			if p != nil {
+				return p.DialTCP(reqCtx, formatDialAddressToURL(addr), network)
+			}
+			return utils.DialContext(reqCtx, network.String(), addr)
+		}
+
+		return transport
+	})
 }
 
 // for all methods in commons
