@@ -1,24 +1,34 @@
 name: build and releases
 on:
-    workflow_dispatch:
-    push:
-      # run only against tags
-      tags:
-        - '*'
+  workflow_dispatch:
+  push:
+    # run only against tags
+    tags:
+      - '*'
 
 jobs:
   go-build:
+    name: build (${{ matrix.group }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - group: linux-x86
+            targets: linux-386.gz linux-amd64.gz linux-amd64-v3.gz
+          - group: linux-arm
+            targets: linux-armv5.gz linux-armv6.gz linux-armv7.gz linux-arm64.gz
+          - group: linux-mips
+            targets: linux-mips-softfloat.gz linux-mips-hardfloat.gz linux-mipsle-softfloat.gz linux-mipsle-hardfloat.gz linux-mips64.gz linux-mips64le.gz
+          - group: linux-other
+            targets: linux-riscv64.gz linux-loong64.gz
+          - group: darwin
+            targets: darwin-amd64.gz darwin-amd64-v3.gz darwin-arm64.gz
+          - group: freebsd
+            targets: freebsd-386.gz freebsd-amd64.gz freebsd-amd64-v3.gz freebsd-arm64.gz
+          - group: windows
+            targets: windows-386.zip windows-amd64.zip windows-amd64-v3.zip windows-arm64.zip windows-armv7.zip
 
     steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
-        with:
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -39,8 +49,33 @@ jobs:
           echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
           head -n 5 ./engine/embeded/default_geoip.js
 
-      - name: build
-        run: make releases
+      - name: build ${{ matrix.group }}
+        run: make ${{ matrix.targets }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.group }}
+          path: ./bin/*
+          if-no-files-found: error
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: go-build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get the tag
+        run: echo "The tag is ${{ github.ref_name }}"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: ./bin
+          merge-multiple: true
 
       - name: Release to current repository
         uses: softprops/action-gh-release@v2
@@ -59,6 +94,14 @@ jobs:
           tag_name: ${{ github.ref_name }}
           repository: AirportR/miaospeed
           token: ${{ secrets.MIAOSPEED_REPO_TOKEN }}
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: publish-release
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Get the tag
         run: |
