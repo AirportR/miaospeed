@@ -26,7 +26,7 @@ jobs:
           - group: freebsd
             targets: freebsd-386.gz freebsd-amd64.gz freebsd-amd64-v3.gz freebsd-arm64.gz
           - group: windows
-            targets: windows-386.zip windows-amd64.zip windows-amd64-v3.zip windows-arm64.zip windows-armv7.zip
+            targets: windows-386.zip windows-amd64.zip windows-amd64-v3.zip windows-arm64.zip
 
     steps:
       - name: Checkout repository

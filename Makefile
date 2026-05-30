@@ -38,8 +38,7 @@ WINDOWS_ARCH_LIST = \
 	windows-386 \
 	windows-amd64 \
 	windows-amd64-v3 \
-	windows-arm64 \
-	windows-armv7
+	windows-arm64
 
 all: linux-amd64 linux-386 darwin-amd64 darwin-arm64 windows-amd64 windows-386 windows-arm64 linux-arm64 linux-armv7 linux-riscv64 linux-loong64 freebsd-amd64 freebsd-arm64# Most used
 
@@ -120,9 +119,6 @@ windows-amd64-v3:
 
 windows-arm64:
 	GOARCH=arm64 GOOS=windows $(GOBUILD) -o $(BINDIR)/$(NAME)-$@.exe
-
-windows-armv7:
-	GOARCH=arm GOOS=windows GOARM=7 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@.exe
 
 gz_releases=$(addsuffix .gz, $(PLATFORM_LIST))
 zip_releases=$(addsuffix .zip, $(WINDOWS_ARCH_LIST))
