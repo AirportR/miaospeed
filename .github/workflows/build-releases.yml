@@ -1,38 +1,377 @@
 name: build and releases
+
 on:
-    workflow_dispatch:
-    push:
-      # run only against tags
-      tags:
-        - '*'
+  workflow_dispatch:
+  push:
+    # run only against tags
+    tags:
+      - '*'
 
 jobs:
-  go-build:
+  deps:
+    name: deps (go mod download)
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Get the tag
-        run: echo "The tag is ${{ github.ref_name }}"
-
-      - uses: actions/setup-go@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
         with:
           go-version: '1.25'
-          cache: true
+          cache: false
 
-      - name: fix embeded
+      - name: Restore Go module cache
+        id: gomod-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/pkg/sumdb
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+
+      - name: Download modules
+        run: go mod download
+
+  build-linux-x86:
+    name: build linux x86
+    runs-on: ubuntu-latest
+    needs: deps
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Restore Go module cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/pkg/sumdb
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+
+      - name: Fix embeded
         run: |
           go env
-          mkdir ./preconfigs/embeded/miaokoCA
+          mkdir -p ./preconfigs/embeded/miaokoCA
           echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
           echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
           echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
           head -n 5 ./engine/embeded/default_geoip.js
 
-      - name: build
-        run: make releases
+      - name: Build archives
+        run: |
+          mkdir -p ./bin
+          make linux-386.gz linux-amd64.gz linux-amd64-v3.gz
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-linux-x86
+          path: ./bin/*
+
+  build-linux-arm:
+    name: build linux arm
+    runs-on: ubuntu-latest
+    needs: deps
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Restore Go module cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/pkg/sumdb
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+
+      - name: Fix embeded
+        run: |
+          go env
+          mkdir -p ./preconfigs/embeded/miaokoCA
+          echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
+          echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
+          echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
+          head -n 5 ./engine/embeded/default_geoip.js
+
+      - name: Build archives
+        run: |
+          mkdir -p ./bin
+          make linux-armv5.gz linux-armv6.gz linux-armv7.gz linux-arm64.gz
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-linux-arm
+          path: ./bin/*
+
+  build-linux-mips:
+    name: build linux mips
+    runs-on: ubuntu-latest
+    needs: deps
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Restore Go module cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/pkg/sumdb
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+
+      - name: Fix embeded
+        run: |
+          go env
+          mkdir -p ./preconfigs/embeded/miaokoCA
+          echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
+          echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
+          echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
+          head -n 5 ./engine/embeded/default_geoip.js
+
+      - name: Build archives
+        run: |
+          mkdir -p ./bin
+          make \
+            linux-mips-softfloat.gz linux-mips-hardfloat.gz \
+            linux-mipsle-softfloat.gz linux-mipsle-hardfloat.gz \
+            linux-mips64.gz linux-mips64le.gz
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-linux-mips
+          path: ./bin/*
+
+  build-linux-misc:
+    name: build linux misc
+    runs-on: ubuntu-latest
+    needs: deps
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Restore Go module cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/pkg/sumdb
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+
+      - name: Fix embeded
+        run: |
+          go env
+          mkdir -p ./preconfigs/embeded/miaokoCA
+          echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
+          echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
+          echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
+          head -n 5 ./engine/embeded/default_geoip.js
+
+      - name: Build archives
+        run: |
+          mkdir -p ./bin
+          make linux-riscv64.gz linux-loong64.gz
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-linux-misc
+          path: ./bin/*
+
+  build-darwin:
+    name: build darwin
+    runs-on: ubuntu-latest
+    needs: deps
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Restore Go module cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/pkg/sumdb
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+
+      - name: Fix embeded
+        run: |
+          go env
+          mkdir -p ./preconfigs/embeded/miaokoCA
+          echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
+          echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
+          echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
+          head -n 5 ./engine/embeded/default_geoip.js
+
+      - name: Build archives
+        run: |
+          mkdir -p ./bin
+          make darwin-amd64.gz darwin-amd64-v3.gz darwin-arm64.gz
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-darwin
+          path: ./bin/*
+
+  build-freebsd:
+    name: build freebsd
+    runs-on: ubuntu-latest
+    needs: deps
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Restore Go module cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/pkg/sumdb
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+
+      - name: Fix embeded
+        run: |
+          go env
+          mkdir -p ./preconfigs/embeded/miaokoCA
+          echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
+          echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
+          echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
+          head -n 5 ./engine/embeded/default_geoip.js
+
+      - name: Build archives
+        run: |
+          mkdir -p ./bin
+          make freebsd-386.gz freebsd-amd64.gz freebsd-amd64-v3.gz freebsd-arm64.gz
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-freebsd
+          path: ./bin/*
+
+  build-windows:
+    name: build windows
+    runs-on: ubuntu-latest
+    needs: deps
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Restore Go module cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/pkg/sumdb
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+
+      - name: Fix embeded
+        run: |
+          go env
+          mkdir -p ./preconfigs/embeded/miaokoCA
+          echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
+          echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
+          echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
+          head -n 5 ./engine/embeded/default_geoip.js
+
+      - name: Build archives
+        run: |
+          mkdir -p ./bin
+          make windows-386.zip windows-amd64.zip windows-amd64-v3.zip windows-arm64.zip windows-armv7.zip
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-windows
+          path: ./bin/*
+
+  release-and-docker:
+    name: release and docker
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux-x86
+      - build-linux-arm
+      - build-linux-mips
+      - build-linux-misc
+      - build-darwin
+      - build-freebsd
+      - build-windows
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: ./bin
+          merge-multiple: true
+
+      - name: Show artifacts
+        run: ls -lah ./bin
 
       - name: Release to current repository
         uses: softprops/action-gh-release@v2
@@ -42,7 +381,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           token: ${{ secrets.MIAOSPEED_REPO_TOKEN }}
 
-      # 发布到另一个仓库 - 使用softprops/action-gh-release
       - name: Release to another repository
         uses: softprops/action-gh-release@v2
         with:
@@ -52,9 +390,9 @@ jobs:
           repository: AirportR/miaospeed
           token: ${{ secrets.MIAOSPEED_REPO_TOKEN }}
 
-      - name: Get the tag
+      - name: Resolve release tag for Docker image
         run: |
-          echo "MIAOSPEED_TAG=$(curl -s https://api.github.com/repos/AirportR/miaospeed/releases/latest | grep 'tag_name' | cut -d '"' -f 4)" >> $GITHUB_ENV
+          echo "MIAOSPEED_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
           echo "The tag is ${{ github.ref_name }}"
 
       - name: Set up QEMU
