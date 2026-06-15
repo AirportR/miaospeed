@@ -1,12 +1,13 @@
 package service
 
 import (
-	jsoniter "github.com/json-iterator/go"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+
+	jsoniter "github.com/json-iterator/go"
 
 	"github.com/airportr/miaospeed/interfaces"
 	"github.com/airportr/miaospeed/preconfigs"
@@ -181,7 +182,7 @@ func InitServer() {
 				}).Init())
 
 				// onstart
-				if sr.Configs.ApiVersion == interfaces.ApiV2 {
+				if sr.Configs.ApiVersion >= interfaces.ApiV2 {
 					_ = conn.WriteJSON(&interfaces.SlaveResponse{
 						ID:               item.ID(),
 						MiaoSpeedVersion: utils.VERSION,
