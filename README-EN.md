@@ -34,6 +34,16 @@ miaospeed is a performance testing tool for proxy servers, written in Go.
 
 ## Basic Usage
 
+### Management Script
+
+The repository includes `miaospeed.sh` for interactive installation, configuration, startup, shutdown, log viewing, and uninstallation on Linux.
+
+Most Linux distributions can start the interactive installer with the following command:
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed.sh -o /tmp/miaospeed.sh && bash /tmp/miaospeed.sh
+```
+
 ### Pre-compiled Binary
 
 * Help information

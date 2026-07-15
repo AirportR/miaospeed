@@ -33,6 +33,16 @@ miaospeed 是一个使用 Go 编写的代理服务器性能测试解决方案。
 
 ## 基本用法
 
+### 管理脚本
+
+仓库提供了 `miaospeed.sh`，用于在Linux上交互式安装、配置、启动、停止、查看日志和卸载 miaospeed。
+
+大部分Linux 发行版可使用以下命令一键启动交互式安装：
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed.sh -o /tmp/miaospeed.sh && bash /tmp/miaospeed.sh
+```
+
 ### 预编译二进制
 
 * 查看帮助信息
