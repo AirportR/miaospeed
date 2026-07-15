@@ -170,6 +170,7 @@ declare -A MSG_EN=(
     [ENTER_MMDB]="Enter MaxMind DB path (comma-separated for multiple, empty for none):"
     [ENTER_CERT_PUB]="Enter public key certificate path (PEM format, empty for default):"
     [ENTER_CERT_PRIV]="Enter private key path (PEM format, empty for default):"
+    [ENTER_CLIENT_CA]="Enter client CA certificate path (PEM format, empty for none):"
     [CONFIG_EDIT_TITLE]="Edit Configuration"
     [CONFIG_EDIT_DESC]="Modify existing MiaoSpeed configuration"
     [CONFIG_EDIT_NOT_FOUND]="No existing configuration found. Please install first."
@@ -216,6 +217,7 @@ declare -A MSG_EN=(
     [UPLOAD_TEST]="Upload Test:"
     [MMDB_PATH]="MMDB:"
     [CUSTOM_CERT]="Custom Cert:"
+    [CLIENT_CA]="Client CA:"
     [PARAM_TOKEN]="Token"
     [PARAM_BIND]="Bind Address/Port"
     [PARAM_WS_PATH]="WebSocket Path"
@@ -231,9 +233,11 @@ declare -A MSG_EN=(
     [PARAM_MTLS_OPT]="mTLS (enable/disable)"
     [PARAM_MMDB_VAL]="MMDB Path"
     [PARAM_CERTS]="Custom Certificates"
+    [PARAM_CLIENT_CA]="Client CA Certificate"
     [ENTER_BIND_ADDR]="Enter bind address"
     [ENTER_PUB_KEY]="Enter public key path"
     [ENTER_PRIV_KEY]="Enter private key path"
+    [ENTER_CLIENT_CA_KEY]="Enter client CA certificate path"
     [LANG_EN]="English"
     [LANG_ZH]="中文"
     [LANG_CHANGED]="Language changed to:"
@@ -391,6 +395,7 @@ declare -A MSG_ZH=(
     [ENTER_MMDB]="输入 MaxMind 数据库路径 (多个用逗号分隔，留空为无):"
     [ENTER_CERT_PUB]="输入公钥证书路径 (PEM 格式，留空使用默认):"
     [ENTER_CERT_PRIV]="输入私钥路径 (PEM 格式，留空使用默认):"
+    [ENTER_CLIENT_CA]="输入客户端 CA 证书路径 (PEM 格式，留空为无):"
     [CONFIG_EDIT_TITLE]="编辑配置"
     [CONFIG_EDIT_DESC]="修改现有 MiaoSpeed 配置"
     [CONFIG_EDIT_NOT_FOUND]="未找到现有配置。请先安装。"
@@ -437,6 +442,7 @@ declare -A MSG_ZH=(
     [UPLOAD_TEST]="上传测速:"
     [MMDB_PATH]="MMDB:"
     [CUSTOM_CERT]="自定义证书:"
+    [CLIENT_CA]="客户端 CA:"
     [PARAM_TOKEN]="令牌"
     [PARAM_BIND]="绑定地址/端口"
     [PARAM_WS_PATH]="WebSocket 路径"
@@ -452,9 +458,11 @@ declare -A MSG_ZH=(
     [PARAM_MTLS_OPT]="mTLS (启用/禁用)"
     [PARAM_MMDB_VAL]="MMDB 路径"
     [PARAM_CERTS]="自定义证书"
+    [PARAM_CLIENT_CA]="客户端 CA 证书"
     [ENTER_BIND_ADDR]="输入绑定地址"
     [ENTER_PUB_KEY]="输入公钥路径"
     [ENTER_PRIV_KEY]="输入私钥路径"
+    [ENTER_CLIENT_CA_KEY]="输入客户端 CA 证书路径"
     [LANG_EN]="English"
     [LANG_ZH]="中文"
     [LANG_CHANGED]="语言已更改为:"
@@ -544,6 +552,7 @@ CFG_PAUSESECOND=0
 CFG_MMDB=""
 CFG_CERT_PUB=""
 CFG_CERT_PRIV=""
+CFG_CLIENT_CA=""
 
 # Script options
 COMMAND="install"    # "install", "start", "stop", "restart", "status", "config", "logs", "uninstall"
@@ -591,6 +600,7 @@ CFG_PAUSESECOND=$CFG_PAUSESECOND
 CFG_MMDB="$CFG_MMDB"
 CFG_CERT_PUB="$CFG_CERT_PUB"
 CFG_CERT_PRIV="$CFG_CERT_PRIV"
+CFG_CLIENT_CA="$CFG_CLIENT_CA"
 PERSISTENCE_METHOD="$PERSISTENCE_METHOD"
 EOF
 }
@@ -743,6 +753,7 @@ $(_ OPTIONS):
     --mmdb PATH                 MaxMind DB path(s)
     --cert-pub PATH             Public key certificate path (PEM)
     --cert-priv PATH            Private key path (PEM)
+    --client-ca PATH            Client CA certificate path (PEM)
     --docker                    Deploy with Docker (skip prompt)
     --local                     Deploy locally (skip prompt)
     --persistence METHOD        Persistence: systemd, openrc, screen, pm2, none
@@ -834,6 +845,7 @@ parse_args() {
             --mmdb) CFG_MMDB="$2"; shift 2 ;;
             --cert-pub) CFG_CERT_PUB="$2"; shift 2 ;;
             --cert-priv) CFG_CERT_PRIV="$2"; shift 2 ;;
+            --client-ca) CFG_CLIENT_CA="$2"; shift 2 ;;
             --docker) DEPLOY_MODE="docker"; shift ;;
             --local) DEPLOY_MODE="local"; shift ;;
             --persistence) PERSISTENCE_METHOD="$2"; shift 2 ;;
@@ -1078,6 +1090,15 @@ config_wizard() {
         fi
     fi
 
+    read -p "$(_ ENTER_CLIENT_CA) [$CFG_CLIENT_CA]: " input_client_ca
+    if [[ -n "$input_client_ca" ]]; then
+        if validate_file "$input_client_ca"; then
+            CFG_CLIENT_CA="$input_client_ca"
+        else
+            log_error "$(_ VALID_FILE) $input_client_ca"
+        fi
+    fi
+
     echo ""
     log_info "$(_ PARAM_INFO)"
     print_current_config
@@ -1115,6 +1136,7 @@ print_current_config() {
     echo "$(_ MTLS_STATUS):              $([[ "$CFG_MTLS" == true ]] && echo "$enabled_text" || echo "$disabled_text")"
     echo "$(_ MMDB_PATH):              ${CFG_MMDB:-$none_text}"
     echo "$(_ CUSTOM_CERT):       $([ -n "$CFG_CERT_PUB" ] && echo "$enabled_text" || echo "$disabled_text")"
+    echo "$(_ CLIENT_CA)         ${CFG_CLIENT_CA:-$none_text}"
     echo "-----------------------------------"
 }
 
@@ -1152,6 +1174,7 @@ config_edit_menu() {
         echo " 13) $(_ PARAM_MTLS_OPT)"
         echo " 14) $(_ PARAM_MMDB_VAL)"
         echo " 15) $(_ PARAM_CERTS)"
+        echo " 16) $(_ PARAM_CLIENT_CA)"
         echo "  s) $(_ SAVE_APPLY)"
         echo "  x) $(_ DISCARD)"
         echo ""
@@ -1239,6 +1262,10 @@ config_edit_menu() {
                 [[ -n "$input" ]] && CFG_CERT_PUB="$input"
                 read -p "$(_ ENTER_PRIV_KEY) [$CFG_CERT_PRIV]: " input
                 [[ -n "$input" ]] && CFG_CERT_PRIV="$input"
+                ;;
+            16)
+                read -p "$(_ ENTER_CLIENT_CA_KEY) [$CFG_CLIENT_CA]: " input
+                [[ -n "$input" ]] && CFG_CLIENT_CA="$input"
                 ;;
             s|S)
                 save_all_params
@@ -1841,6 +1868,7 @@ build_command_args() {
     [[ -n "$CFG_MMDB" ]] && args+=("-mmdb" "$CFG_MMDB")
     [[ -n "$CFG_CERT_PUB" ]] && args+=("-serverpublickey" "$CFG_CERT_PUB")
     [[ -n "$CFG_CERT_PRIV" ]] && args+=("-serverprivatekey" "$CFG_CERT_PRIV")
+    [[ -n "$CFG_CLIENT_CA" ]] && args+=("-clientca" "$CFG_CLIENT_CA")
 
     # Return array via global variable
     COMMAND_ARGS=("${args[@]}")

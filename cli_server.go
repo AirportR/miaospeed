@@ -35,6 +35,7 @@ func InitConfigServer() *utils.GlobalConfig {
 	whiteList := sflag.String("whitelist", "", "bot id whitelist, can be format like 1111,2222,3333")
 	pubKeyStr := sflag.String("serverpublickey", "", "specific the sever public key (PEM format)")
 	privKeyStr := sflag.String("serverprivatekey", "", "specific the sever private key (PEM format)")
+	clientCAStr := sflag.String("clientca", "", "path to client CA certificate (PEM) - enables optional mTLS: verify client cert if presented, allow without")
 	demoMode := sflag.Bool("demo", false, "run server in demo mode with default configs")
 
 	parseFlag(sflag)
@@ -95,6 +96,21 @@ func InitConfigServer() *utils.GlobalConfig {
 	if priKey := utils.ReadFile(*privKeyStr); priKey != "" {
 		utils.DLog("Override predefined tls key")
 		preconfigs.MIAOKO_TLS_KEY = priKey
+	}
+	if *clientCAStr != "" {
+		if !gcfg.MiaoKoSignedTLS {
+			utils.DWarnf("MiaoSpeed Server | clientca is configured but -mtls is disabled; client certificate verification will not be used")
+		}
+		caData := utils.ReadFile(*clientCAStr)
+		if caData == "" {
+			utils.DErrorf("Failed to read client CA certificate from %s", *clientCAStr)
+			os.Exit(1)
+		}
+		if !preconfigs.LoadClientCAFromPEM(caData) {
+			utils.DErrorf("Failed to parse client CA certificate from %s, no valid PEM data", *clientCAStr)
+			os.Exit(1)
+		}
+		utils.DLog("Loaded client CA for optional mTLS verification")
 	}
 	return gcfg
 }

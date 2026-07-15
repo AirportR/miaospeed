@@ -65,6 +65,10 @@ The following are **optional** operations:
 
 After you have created the above files, you can run `go build .` to build `miaospeed`.
 
+### TLS and Client Certificates
+
+`-mtls` enables the server TLS certificate so clients can verify the server identity. To verify client certificates when clients present them, also pass `-clientca <path>` with the trusted client CA certificate. This mode is optional client certificate verification: a presented client certificate must chain to that CA, while clients without a certificate continue to connect through the existing logic.
+
 ### Pre-compiled Binary Instructions
 
 The pre-compiled binaries in this repository are **compatible** with the original closed-source client Miaoko.
