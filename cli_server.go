@@ -27,7 +27,7 @@ func InitConfigServer() *utils.GlobalConfig {
 	sflag.UintVar(&gcfg.PauseSecond, "pausesecond", 0, "pause such period after each speed job (seconds)")
 	sflag.BoolVar(&gcfg.MiaoKoSignedTLS, "mtls", false, "enable miaoko certs for tls verification")
 	sflag.BoolVar(&gcfg.NoSpeedFlag, "nospeed", false, "decline all download speedtest requests")
-	sflag.BoolVar(&gcfg.EnableUploadSpeedFlag, "upload", false, "decline all upload speedtest requests")
+	sflag.BoolVar(&gcfg.EnableUploadSpeedFlag, "upload", false, "enable all upload speedtest requests")
 	sflag.BoolVar(&gcfg.EnableIPv6, "ipv6", false, "enable ipv6 support")
 	sflag.StringVar(&gcfg.MaxmindDB, "mmdb", "", "reroute all geoip query to local mmdbs. for example: test.mmdb,testcity.mmdb")
 	path := sflag.String("path", "", "specific websocket path you want, default '/'")
