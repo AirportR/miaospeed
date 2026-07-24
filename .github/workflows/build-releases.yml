@@ -58,6 +58,7 @@ jobs:
           name: bin-${{ matrix.group }}
           path: ./bin/*
           if-no-files-found: error
+          retention-days: 1
 
   publish-release:
     runs-on: ubuntu-latest
