@@ -25,7 +25,7 @@ func InitConfigServer() *utils.GlobalConfig {
 	sflag.UintVar(&gcfg.TaskLimit, "tasklimit", 1000, "limit of tasks in queue, default with 1000")
 	sflag.Uint64Var(&gcfg.SpeedLimit, "speedlimit", 0, "speed ratelimit (in Bytes per Second), default with no limits")
 	sflag.UintVar(&gcfg.PauseSecond, "pausesecond", 0, "pause such period after each speed job (seconds)")
-	sflag.BoolVar(&gcfg.MiaoKoSignedTLS, "mtls", false, "enable miaoko certs for tls verification")
+	sflag.BoolVar(&gcfg.MiaoKoSignedTLS, "mtls", false, "enable embedded certs for TLS verification.")
 	sflag.BoolVar(&gcfg.NoSpeedFlag, "nospeed", false, "decline all download speedtest requests")
 	sflag.BoolVar(&gcfg.EnableUploadSpeedFlag, "upload", false, "enable all upload speedtest requests")
 	sflag.BoolVar(&gcfg.EnableIPv6, "ipv6", false, "enable ipv6 support")
