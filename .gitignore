@@ -12,6 +12,8 @@ dist
 build.*.sh
 *.mmdb
 .idea/
+.reasonix/
+.codex/
 
 # configs
 test.yaml
