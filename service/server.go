@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	jsoniter "github.com/json-iterator/go"
 
@@ -60,13 +61,21 @@ func InitServer() {
 				utils.DErrorf("MiaoServer Test | Socket establishing error, error=%s", err.Error())
 				return
 			}
+			var writeMu sync.Mutex
+			writeJSON := func(v any) error {
+				writeMu.Lock()
+				defer writeMu.Unlock()
+				return conn.WriteJSON(v)
+			}
 			defer func() {
+				writeMu.Lock()
 				_ = conn.Close()
+				writeMu.Unlock()
 			}()
 			utils.DLogf("MiaoServer | new unverified connection | remote=%s", r.RemoteAddr)
 			// Verify the websocket path
 			if !utils.GCFG.ValidateWSPath(r.URL.Path) {
-				_ = conn.WriteJSON(&interfaces.SlaveResponse{
+				_ = writeJSON(&interfaces.SlaveResponse{
 					Error: "invalid websocket path",
 				})
 				utils.DWarnf("MiaoServer Test | websocket path error, error=%s", "invalid websocket path")
@@ -107,16 +116,15 @@ func InitServer() {
 
 				// verify token
 				if !verified {
-					_ = conn.WriteJSON(&interfaces.SlaveResponse{
+					_ = writeJSON(&interfaces.SlaveResponse{
 						Error: "cannot verify the request, please check your token",
 					})
 					return
 				}
 				sr.Challenge = ""
-
 				// verify invoker
 				if !utils.GCFG.InWhiteList(sr.Basics.Invoker) {
-					_ = conn.WriteJSON(&interfaces.SlaveResponse{
+					_ = writeJSON(&interfaces.SlaveResponse{
 						Error: "the bot id is not in the whitelist",
 					})
 					return
@@ -131,7 +139,7 @@ func InitServer() {
 				// select poll
 				if structs.Contains(macros, interfaces.MacroSpeed) || structs.Contains(macros, interfaces.MacroSleep) {
 					if utils.GCFG.NoSpeedFlag {
-						_ = conn.WriteJSON(&interfaces.SlaveResponse{
+						_ = writeJSON(&interfaces.SlaveResponse{
 							Error: "speedtest is disabled on backend",
 						})
 						return
@@ -154,7 +162,7 @@ func InitServer() {
 					matricesExtra: extra,
 					macros:        macros,
 					onProcess: func(self *TestingPollItem, idx int, result interfaces.SlaveEntrySlot) {
-						_ = conn.WriteJSON(&interfaces.SlaveResponse{
+						_ = writeJSON(&interfaces.SlaveResponse{
 							ID:               self.ID(),
 							MiaoSpeedVersion: utils.VERSION,
 							Progress: &interfaces.SlaveProgress{
@@ -166,7 +174,7 @@ func InitServer() {
 					},
 					onExit: func(self *TestingPollItem, exitCode taskpoll.TPExitCode) {
 						batches.Del(self.ID())
-						_ = conn.WriteJSON(&interfaces.SlaveResponse{
+						_ = writeJSON(&interfaces.SlaveResponse{
 							ID:               self.ID(),
 							MiaoSpeedVersion: utils.VERSION,
 							Result: &interfaces.SlaveTask{
@@ -183,7 +191,7 @@ func InitServer() {
 
 				// onstart
 				if sr.Configs.ApiVersion >= interfaces.ApiV2 {
-					_ = conn.WriteJSON(&interfaces.SlaveResponse{
+					_ = writeJSON(&interfaces.SlaveResponse{
 						ID:               item.ID(),
 						MiaoSpeedVersion: utils.VERSION,
 						Progress: &interfaces.SlaveProgress{
