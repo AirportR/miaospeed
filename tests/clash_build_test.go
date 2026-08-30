@@ -189,6 +189,28 @@ password: pass
 	}
 }
 
+func TestClashBuild_ShadowQuic(t *testing.T) {
+	vendor := buildClashVendor("shadowquic", `
+name: shadowquic
+type: shadowquic
+server: example.com
+port: 10443
+username: username
+password: password
+`)
+
+	if vendor.Status() != interfaces.VStatusOperational {
+		t.Fatalf("expected status %v, got %v", interfaces.VStatusOperational, vendor.Status())
+	}
+
+	proxyInfo := vendor.ProxyInfo()
+	if proxyInfo.Name != "shadowquic" {
+		t.Fatalf("expected proxy name shadowquic, got %s", proxyInfo.Name)
+	}
+	if proxyInfo.Type != interfaces.ShadowQuic {
+		t.Fatalf("expected proxy type %s, got %s", interfaces.ShadowQuic, proxyInfo.Type)
+	}
+}
 func TestClashBuild_OpenVPNExperimental(t *testing.T) {
 	vendor := buildClashVendor("openvpn", fmt.Sprintf(`
 name: openvpn
