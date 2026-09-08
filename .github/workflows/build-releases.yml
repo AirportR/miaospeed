@@ -60,9 +60,64 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  android-apk:
+    name: build (android-apk)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # 完整历史，保证 gradle 里 git describe 能取到核心版本号
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: fix embeded
+        run: |
+          mkdir ./preconfigs/embeded/miaokoCA
+          echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
+          echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
+          echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
+
+      - name: restore signing key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > android/keystore.jks
+            printf 'storeFile=keystore.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$KS_PASS" "$KS_ALIAS" "$KS_PASS" > android/keystore.properties
+          else
+            echo "No keystore secrets configured, APK will fall back to debug signing"
+          fi
+
+      - name: build apk
+        run: make android-apk
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-android
+          path: ./bin/*
+          if-no-files-found: error
+          retention-days: 1
+
   publish-release:
     runs-on: ubuntu-latest
-    needs: go-build
+    needs: [go-build, android-apk]
 
     steps:
       - name: Checkout repository
