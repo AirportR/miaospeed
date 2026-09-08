@@ -120,6 +120,16 @@ windows-amd64-v3:
 windows-arm64:
 	GOARCH=arm64 GOOS=windows $(GOBUILD) -o $(BINDIR)/$(NAME)-$@.exe
 
+android-so:
+	GOOS=android GOARCH=arm64 $(GOBUILD) -o android/app/src/main/jniLibs/arm64-v8a/libmiaospeed.so .
+
+android-apk: android-so
+	cd android && ./gradlew assembleRelease
+	mkdir -p $(BINDIR)
+	cp android/app/build/outputs/apk/release/miaospeed-$(shell git describe --tags --abbrev=0)-arm64-v8a.apk $(BINDIR)/
+
+android: android-apk
+
 gz_releases=$(addsuffix .gz, $(PLATFORM_LIST))
 zip_releases=$(addsuffix .zip, $(WINDOWS_ARCH_LIST))
 

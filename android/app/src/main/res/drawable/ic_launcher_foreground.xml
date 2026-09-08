@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 仪表盘外环（上半圆） -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30.4,43.0 A26,26 0 0 1 77.6,43.0 L70.3,46.4 A18,18 0 0 0 37.7,46.4 Z" />
+    <!-- 指针 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M52.2,55.2 L64.0,36.7 L57.0,57.2 Z" />
+    <!-- 中心圆点 -->
+    <path
+        android:fillColor="#64D2FF"
+        android:pathData="M54,54 m-3.8,0 a3.8,3.8 0 1 0 7.6,0 a3.8,3.8 0 1 0 -7.6,0" />
+    <!-- 底部短横（表盘底座） -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,70 h24 a1.5,1.5 0 0 1 0,3 h-24 a1.5,1.5 0 0 1 0,-3 z" />
+</vector>
