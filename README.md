@@ -30,6 +30,7 @@ miaospeed 是一个使用 Go 编写的代理服务器性能测试解决方案。
 - 支持主流出站代理协议：Shadowsocks、Vmess、VLESS、Trojan、Hysteria2、AnyTLS 等。
 - 丰富的测试参数配置，支持自定义请求体、超时、并发数等。
 - 支持自定义 JavaScript 测试脚本，可实现自定义测试逻辑。
+- 支持反向连接：后端位于 NAT 后没有公网时，可主动外连到有公网的客户端。
 
 ## 基本用法
 
@@ -79,6 +80,50 @@ curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed
 ### TLS 与客户端证书
 
 `-mtls` 会启用服务端 TLS 证书，供客户端验证服务端身份。若需要在客户端提供证书时验证客户端证书，可同时传入 `-clientca <path>` 指定服务端信任的客户端 CA 证书。此模式为可选客户端证书校验：客户端提供证书时必须能被该 CA 验证；客户端不提供证书时仍按原逻辑继续连接。
+
+### 反向连接（Reverse Connect）
+
+正常模式下 miaospeed 作为服务端监听端口，等待客户端（面板）主动连接。当 miaospeed 所在机器**没有公网**而客户端有公网时，可以让 miaospeed **主动外连**客户端：
+
+```shell
+./miaospeed server -connect wss://panel.example.com/reverse -token YOUR_TOKEN
+```
+
+- `-connect` 可与 `-bind` 同时使用（本地监听与反连并行）；只给 `-connect` 时不开启本地监听。
+- 除 `-token` 外，其余服务端参数（`-connthread`、`-speedlimit`、`-nospeed` 等）在反连模式下同样生效。
+- 反连固定维持 **4 条**活跃出站连接（连接池），每条连接都是独立完整的测试会话；断开后按 1s~60s 指数退避自动重连。
+- 出站连接带 ping/pong 心跳（默认 30s，可被客户端在 ack 中覆盖），防止 NAT 空闲断链；`wss` 使用系统根证书校验。
+
+**客户端（面板）侧需要实现的握手契约**（`reverse-v1`）：
+
+1. 面板提供一个 WebSocket 端点接收 miaospeed 的外连。连接建立后，miaospeed 会发送第一条 JSON 消息 `ReverseHello`（字段名与现有协议一致，均为 PascalCase）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `Type` | 固定为 `"hello"` |
+| `Protocol` | 协议版本，当前为 `"reverse-v1"` |
+| `Version` | miaospeed 版本号 |
+| `Nonce` | 随机字符串 |
+| `Timestamp` | Unix 秒级时间戳 |
+| `Sign` | `hashMiaoSpeed(token, "reverse-hello\|" + Nonce + "\|" + Timestamp)` |
+
+2. 面板用同一 `token` 校验 `Sign`（算法与请求签名一致，见 `utils/challenge.go`），然后回 `ReverseAck`：
+
+| 字段 | 说明 |
+| --- | --- |
+| `Type` | `"ack"` 表示接受；其他值为拒绝，miaospeed 会断开并退避重试 |
+| `Protocol` | 原样返回 `reverse-v1`，版本协商锚点 |
+| `Sign` | `hashMiaoSpeed(token, hello.Sign)`，证明面板持有同一 token（双向认证） |
+| `Version` / `Name` | 面板版本与名称，仅用于日志 |
+| `Timestamp` | 面板时间戳，用于时钟偏差排查 |
+| `SessionID` | 面板为该连接分配的会话 ID，用于日志关联 |
+| `Heartbeat` | 心跳间隔（秒），`0` 表示使用后端默认 30s |
+| `MaxTasks` | 建议的单连接最大并发任务数，`0` 表示不限制（后端仅记录） |
+| `Error` | 拒绝原因，`Type != "ack"` 时使用 |
+
+3. 握手完成后，该连接按原生 miaospeed 协议收发（面板发送签名 `SlaveRequest`，后端流式返回 `SlaveResponse`），与主动连接模式完全一致。注意面板侧需要响应后端的 ping（标准 WebSocket 库默认行为）。
+
+完整实现可参考 `tests/reverse_test.go` 中的 mock panel。
 
 ### 预编译二进制说明
 

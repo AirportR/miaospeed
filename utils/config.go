@@ -22,6 +22,7 @@ type GlobalConfig struct {
 	EnableIPv6            bool
 	MaxmindDB             string
 	Path                  string
+	ConnectURL            string
 }
 
 func (gc *GlobalConfig) InWhiteList(invoker string) bool {

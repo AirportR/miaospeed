@@ -37,8 +37,22 @@ func InitConfigServer() *utils.GlobalConfig {
 	privKeyStr := sflag.String("serverprivatekey", "", "specific the sever private key (PEM format)")
 	clientCAStr := sflag.String("clientca", "", "path to client CA certificate (PEM) - enables optional mTLS: verify client cert if presented, allow without")
 	demoMode := sflag.Bool("demo", false, "run server in demo mode with default configs")
+	connectURL := sflag.String("connect", "", "reverse connection: dial OUT to a websocket endpoint hosted by the client, e.g. wss://panel.example.com/reverse. Useful when this host has no public ip")
 
 	parseFlag(sflag)
+
+	gcfg.ConnectURL = strings.TrimSpace(*connectURL)
+	if gcfg.ConnectURL != "" {
+		// The reverse connector authenticates with the same token the
+		// panel uses for signing requests.
+		if gcfg.Token == "" {
+			utils.DErrorf("MiaoSpeed Server | -connect requires -token to authenticate with the client")
+			os.Exit(1)
+		}
+		if gcfg.Binder == "" {
+			utils.DWarnf("MiaoSpeed Server | -connect is set without -bind, running in reverse-only mode (no inbound listener)")
+		}
+	}
 
 	gcfg.WhiteList = make([]string, 0)
 	if *whiteList != "" {
@@ -129,9 +143,17 @@ func RunCliServer() {
 	go service.StartTaskServer()
 	startPprofServer()
 
+	// reverse connection: dial out to the client. Can run alone or
+	// alongside the inbound listener (both share the task polls).
+	if utils.GCFG.ConnectURL != "" {
+		go service.RunReverseConnector()
+	}
+
 	// start api server
-	service.CleanUpServer()
-	go service.InitServer()
+	if utils.GCFG.Binder != "" {
+		service.CleanUpServer()
+		go service.InitServer()
+	}
 
 	<-utils.MakeSysChan()
 
