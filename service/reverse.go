@@ -13,11 +13,9 @@ import (
 )
 
 // The reverse connector keeps a fixed-size pool of outbound websocket
-// connections to the client/panel (see `-connect`). Every pooled connection
-// is a complete, independent miaospeed session speaking the same protocol as
-// the inbound listener; a single connection already multiplexes any number
-// of concurrent tasks. Lost connections are replaced in the background with
-// exponential backoff (1s..60s) so the pool size is eventually restored.
+// connections to the client/panel (see `-connect`). Each connection is an
+// independent miaospeed session identical to the inbound listener; lost
+// connections are re-dialed with exponential backoff.
 
 const (
 	reversePoolSize      = 4
@@ -26,14 +24,11 @@ const (
 	reverseBackoffBase   = 1 * time.Second
 	reverseBackoffMax    = 60 * time.Second
 
-	// reverseStableLink is the uptime after which a link counts as healthy;
-	// its loss restarts the backoff curve from the base delay instead of
-	// growing it further.
+	// reverseStableLink: a link alive this long resets the backoff curve on loss.
 	reverseStableLink = 30 * time.Second
 
-	// The client may request a heartbeat interval in its ack. Clamp the
-	// value so a misbehaving panel can neither force a ping storm nor push
-	// the read window so far out that dead links go unnoticed for hours.
+	// Clamp the client-requested heartbeat so it can neither force a ping
+	// storm nor push the read window past useful liveness detection.
 	reverseHeartbeatMinSecs = 10
 	reverseHeartbeatMaxSecs = 300
 )
@@ -44,15 +39,14 @@ var reverseDialer = websocket.Dialer{
 	HandshakeTimeout: reverseDialTimeout,
 }
 
-// reverseHandshakeSign builds the handshake signature:
-// hashMiaoSpeed(token, "reverse-hello|nonce|timestamp"). The panel must
-// implement the same algorithm (see README reverse-connection section).
+// reverseHandshakeSign signs the msr-v1 handshake payload
+// "reverse-hello|nonce|timestamp" with the shared token.
 func reverseHandshakeSign(token, nonce string, timestamp int64) string {
 	return utils.SignChallenge(token, fmt.Sprintf("reverse-hello|%s|%d", nonce, timestamp))
 }
 
-// RunReverseConnector starts maintaining the outbound connection pool; call
-// it in a goroutine. It exits early if the connect URL is empty or invalid.
+// RunReverseConnector maintains the outbound connection pool; call it in a
+// goroutine. It exits early if the connect URL is empty or invalid.
 func RunReverseConnector() {
 	rawURL := utils.GCFG.ConnectURL
 	if rawURL == "" {
@@ -81,10 +75,9 @@ func RunReverseConnector() {
 	}
 }
 
-// runReverseWorker owns one pool slot: dial, handshake, serve the session,
-// and on any failure retry with exponential backoff. A graceful close by the
-// client (normal closure / going away) means a task finished and the client
-// freed the slot on purpose, so reconnect immediately without backoff.
+// runReverseWorker owns one pool slot: dial, handshake, serve, then retry
+// with exponential backoff. A graceful client close frees the slot on
+// purpose, so reconnect immediately without backoff.
 func runReverseWorker(slot int, rawURL string) {
 	backoff := reverseBackoffBase
 	for {
@@ -95,8 +88,6 @@ func runReverseWorker(slot int, rawURL string) {
 			continue
 		}
 		if time.Since(started) >= reverseStableLink {
-			// The link was healthy for a while, so the client is probably
-			// fine and this was a fluke: restart the backoff curve.
 			backoff = reverseBackoffBase
 		}
 		utils.DErrorf("MiaoSpeed Reverse | Slot %d connection lost, error=%s retry_in=%s", slot, err.Error(), backoff)
@@ -108,12 +99,9 @@ func runReverseWorker(slot int, rawURL string) {
 	}
 }
 
-// errClientClosed marks a session the client ended deliberately (normal
-// close handshake after a finished task, or a stop request).
+// errClientClosed marks a session the client ended deliberately.
 var errClientClosed = errors.New("closed by client")
 
-// isClientCloseError reports whether the websocket close was initiated by
-// the client with an expected close code, rather than a network failure.
 func isClientCloseError(err error) bool {
 	if err == nil {
 		return false
@@ -131,9 +119,7 @@ func runReverseSession(slot int, rawURL string) error {
 	conn, resp, err := reverseDialer.Dial(rawURL, http.Header{})
 	if err != nil {
 		if resp != nil {
-			// A non-101 response still carries a body gorilla leaves open for
-			// inspection; close it so the underlying connection can be reused.
-			_ = resp.Body.Close()
+			_ = resp.Body.Close() // gorilla leaves the body open on non-101 responses
 			return fmt.Errorf("dial failed with http status %d", resp.StatusCode)
 		}
 		return fmt.Errorf("dial failed: %w", err)
@@ -163,9 +149,8 @@ func runReverseSession(slot int, rawURL string) error {
 	utils.DWarnf("MiaoSpeed Reverse | Slot %d link established, remote=%s client=%s/%s session=%s heartbeat=%ds maxTasks=%d",
 		slot, remote, ack.Name, ack.Version, ack.SessionID, heartbeat, ack.MaxTasks)
 
-	// Liveness: the read deadline is renewed by incoming pongs, so a
-	// silently dead link is detected within two heartbeat intervals even
-	// when TCP itself does not notice.
+	// The read deadline is renewed by pongs, so a dead link surfaces within
+	// two heartbeat intervals even when TCP does not notice.
 	_ = conn.SetReadDeadline(time.Now().Add(readWindow))
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(readWindow))
@@ -198,9 +183,7 @@ func reverseHandshake(conn *websocket.Conn) (*interfaces.ReverseAck, error) {
 		Timestamp: ts,
 		Sign:      reverseHandshakeSign(utils.GCFG.Token, nonce, ts),
 	}
-	// The write side gets its own deadline: a peer that accepts the TCP
-	// connection but never reads would stall the handshake forever. It is
-	// cleared right after the write so it cannot leak into the session.
+	// Bound the handshake write; cleared below so it cannot leak into the session.
 	_ = conn.SetWriteDeadline(time.Now().Add(reverseDialTimeout))
 	if err := conn.WriteJSON(hello); err != nil {
 		return nil, fmt.Errorf("handshake write failed: %w", err)
@@ -212,8 +195,7 @@ func reverseHandshake(conn *websocket.Conn) (*interfaces.ReverseAck, error) {
 	if err := conn.ReadJSON(&ack); err != nil {
 		return nil, fmt.Errorf("handshake read failed: %w", err)
 	}
-	// Hand the connection over to the session without inherited deadlines.
-	_ = conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{}) // hand over to the session without deadlines
 
 	if ack.Type != interfaces.ReverseMsgAck {
 		reason := ack.Error
@@ -232,9 +214,8 @@ func reverseHandshake(conn *websocket.Conn) (*interfaces.ReverseAck, error) {
 }
 
 // reverseHeartbeatLoop pings the client on the negotiated interval.
-// WriteControl is safe to call concurrently with the session's data writes
-// and carries its own deadline, so a stalled link unblocks the heartbeat
-// instead of hanging forever.
+// WriteControl is safe alongside session data writes and carries its own
+// deadline, so a stalled link cannot hang it.
 func reverseHeartbeatLoop(conn *websocket.Conn, interval time.Duration, done <-chan struct{}) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
