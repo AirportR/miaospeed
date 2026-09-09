@@ -123,6 +123,11 @@ curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed
 
 3. 握手完成后，该连接按原生 miaospeed 协议收发（面板发送签名 `SlaveRequest`，后端流式返回 `SlaveResponse`），与主动连接模式完全一致。注意面板侧需要响应后端的 ping（标准 WebSocket 库默认行为）。
 
+**对接面板的两个实现前提**：
+
+- **TLS 证书**：反连出站使用 Go 系统根证书做 TLS 校验，因此面板的 `wss://` 端点必须使用受信 CA 签发的证书；后端生态默认的 Miaoko 自签证书体系（`-mtls`）并不用于反连。若面板使用自签证书，后端会在 TLS 校验阶段直接失败。
+- **BUILDTOKEN 耦合**：反连握手签名与正常请求签名共用同一个 `hashMiaoSpeed` 原语，而后端编译时会把自己嵌入的 `BUILDTOKEN` 混入摘要。面板侧签名/校验实现必须与后端保持一致（即复用与官方请求签名相同的那套实现、嵌入相同的 BUILDTOKEN）；仅算法相同但 BUILDTOKEN 不同的构建会校验失败。
+
 完整实现可参考 `tests/reverse_test.go` 中的 mock panel。
 
 ### 预编译二进制说明

@@ -98,6 +98,13 @@ func InitConfigServer() *utils.GlobalConfig {
 		fmt.Println("===============================\tEnd of line\t================================")
 	}
 
+	// Nothing to serve: without -bind the server does not listen and without
+	// -connect it does not dial out. Fail loudly instead of idling forever.
+	if gcfg.ConnectURL == "" && gcfg.Binder == "" {
+		utils.DErrorf("MiaoSpeed Server | both -bind and -connect are empty, nothing to serve")
+		os.Exit(1)
+	}
+
 	if gcfg.Path == "/" {
 		utils.DWarnf("MiaoSpeed Server | Using an unsafe websocket path: %s", gcfg.Path)
 	} else {

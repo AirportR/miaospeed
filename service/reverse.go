@@ -30,6 +30,12 @@ const (
 	// its loss restarts the backoff curve from the base delay instead of
 	// growing it further.
 	reverseStableLink = 30 * time.Second
+
+	// The client may request a heartbeat interval in its ack. Clamp the
+	// value so a misbehaving panel can neither force a ping storm nor push
+	// the read window so far out that dead links go unnoticed for hours.
+	reverseHeartbeatMinSecs = 10
+	reverseHeartbeatMaxSecs = 300
 )
 
 var reverseDialer = websocket.Dialer{
@@ -93,10 +99,6 @@ func runReverseWorker(slot int, rawURL string) {
 			// fine and this was a fluke: restart the backoff curve.
 			backoff = reverseBackoffBase
 		}
-		if err == nil {
-			backoff = reverseBackoffBase
-			continue
-		}
 		utils.DErrorf("MiaoSpeed Reverse | Slot %d connection lost, error=%s retry_in=%s", slot, err.Error(), backoff)
 		time.Sleep(backoff)
 		backoff *= 2
@@ -129,6 +131,9 @@ func runReverseSession(slot int, rawURL string) error {
 	conn, resp, err := reverseDialer.Dial(rawURL, http.Header{})
 	if err != nil {
 		if resp != nil {
+			// A non-101 response still carries a body gorilla leaves open for
+			// inspection; close it so the underlying connection can be reused.
+			_ = resp.Body.Close()
 			return fmt.Errorf("dial failed with http status %d", resp.StatusCode)
 		}
 		return fmt.Errorf("dial failed: %w", err)
@@ -145,6 +150,12 @@ func runReverseSession(slot int, rawURL string) error {
 	heartbeat := int64(reverseHeartbeatSecs)
 	if ack.Heartbeat > 0 {
 		heartbeat = ack.Heartbeat
+		if heartbeat < reverseHeartbeatMinSecs {
+			heartbeat = reverseHeartbeatMinSecs
+		}
+		if heartbeat > reverseHeartbeatMaxSecs {
+			heartbeat = reverseHeartbeatMaxSecs
+		}
 	}
 	interval := time.Duration(heartbeat) * time.Second
 	readWindow := 2 * interval
@@ -187,9 +198,14 @@ func reverseHandshake(conn *websocket.Conn) (*interfaces.ReverseAck, error) {
 		Timestamp: ts,
 		Sign:      reverseHandshakeSign(utils.GCFG.Token, nonce, ts),
 	}
+	// The write side gets its own deadline: a peer that accepts the TCP
+	// connection but never reads would stall the handshake forever. It is
+	// cleared right after the write so it cannot leak into the session.
+	_ = conn.SetWriteDeadline(time.Now().Add(reverseDialTimeout))
 	if err := conn.WriteJSON(hello); err != nil {
 		return nil, fmt.Errorf("handshake write failed: %w", err)
 	}
+	_ = conn.SetWriteDeadline(time.Time{})
 
 	_ = conn.SetReadDeadline(time.Now().Add(2 * reverseDialTimeout))
 	var ack interfaces.ReverseAck
