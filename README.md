@@ -77,11 +77,8 @@ curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed
 
 当您新建好以上文件后，就可以运行 `go build .` 构建 `miaospeed` 了。
 
-### TLS 与客户端证书
 
-`-mtls` 会启用服务端 TLS 证书，供客户端验证服务端身份。若需要在客户端提供证书时验证客户端证书，可同时传入 `-clientca <path>` 指定服务端信任的客户端 CA 证书。此模式为可选客户端证书校验：客户端提供证书时必须能被该 CA 验证；客户端不提供证书时仍按原逻辑继续连接。
-
-### 反向连接（Reverse Connect）
+### 反向连接
 
 正常模式下 miaospeed 作为服务端监听端口，等待客户端（面板）主动连接。当 miaospeed 所在机器**没有公网**而客户端有公网时，可以让 miaospeed **主动外连**客户端：
 
@@ -94,25 +91,25 @@ curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed
 - 反连固定维持 **4 条**活跃出站连接（连接池），每条连接都是独立完整的测试会话；断开后按 1s~60s 指数退避自动重连。
 - 出站连接带 ping/pong 心跳（默认 30s，可被客户端在 ack 中覆盖），防止 NAT 空闲断链；`wss` 使用系统根证书校验。
 
-**客户端（面板）侧需要实现的握手契约**（`reverse-v1`）：
+**客户端握手协议**（`msr-v1`）：
 
-1. 面板提供一个 WebSocket 端点接收 miaospeed 的外连。连接建立后，miaospeed 会发送第一条 JSON 消息 `ReverseHello`（字段名与现有协议一致，均为 PascalCase）：
+1. 客户端提供一个 WebSocket 端点接收 miaospeed 的主动连接。连接建立后，miaospeed 会发送第一条 JSON 消息 `ReverseHello`：
 
 | 字段 | 说明 |
 | --- | --- |
 | `Type` | 固定为 `"hello"` |
-| `Protocol` | 协议版本，当前为 `"reverse-v1"` |
+| `Protocol` | 协议版本，当前为 `"msr-v1"` |
 | `Version` | miaospeed 版本号 |
 | `Nonce` | 随机字符串 |
 | `Timestamp` | Unix 秒级时间戳 |
 | `Sign` | `hashMiaoSpeed(token, "reverse-hello\|" + Nonce + "\|" + Timestamp)` |
 
-2. 面板用同一 `token` 校验 `Sign`（算法与请求签名一致，见 `utils/challenge.go`），然后回 `ReverseAck`：
+2. 客户端用同一 `token` 校验 `Sign`，然后发送 `ReverseAck`：
 
 | 字段 | 说明 |
 | --- | --- |
 | `Type` | `"ack"` 表示接受；其他值为拒绝，miaospeed 会断开并退避重试 |
-| `Protocol` | 原样返回 `reverse-v1`，版本协商锚点 |
+| `Protocol` | 原样返回 `msr-v1`，版本协商锚点 |
 | `Sign` | `hashMiaoSpeed(token, hello.Sign)`，证明面板持有同一 token（双向认证） |
 | `Version` / `Name` | 面板版本与名称，仅用于日志 |
 | `Timestamp` | 面板时间戳，用于时钟偏差排查 |
@@ -121,12 +118,7 @@ curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed
 | `MaxTasks` | 建议的单连接最大并发任务数，`0` 表示不限制（后端仅记录） |
 | `Error` | 拒绝原因，`Type != "ack"` 时使用 |
 
-3. 握手完成后，该连接按原生 miaospeed 协议收发（面板发送签名 `SlaveRequest`，后端流式返回 `SlaveResponse`），与主动连接模式完全一致。注意面板侧需要响应后端的 ping（标准 WebSocket 库默认行为）。
 
-**对接面板的两个实现前提**：
-
-- **TLS 证书**：反连出站使用 Go 系统根证书做 TLS 校验，因此面板的 `wss://` 端点必须使用受信 CA 签发的证书；后端生态默认的 Miaoko 自签证书体系（`-mtls`）并不用于反连。若面板使用自签证书，后端会在 TLS 校验阶段直接失败。
-- **BUILDTOKEN 耦合**：反连握手签名与正常请求签名共用同一个 `hashMiaoSpeed` 原语，而后端编译时会把自己嵌入的 `BUILDTOKEN` 混入摘要。面板侧签名/校验实现必须与后端保持一致（即复用与官方请求签名相同的那套实现、嵌入相同的 BUILDTOKEN）；仅算法相同但 BUILDTOKEN 不同的构建会校验失败。
 
 完整实现可参考 `tests/reverse_test.go` 中的 mock panel。
 
@@ -151,7 +143,7 @@ MIAOKO4|580JxAo049R|GEnERAl|1X571R930|T0kEN
 5. 发送完成签名后的请求，您就可以接收返回值了。服务器返回的结构体统一为 https://github.com/AirportR/miaospeed/blob/fd7abecc2d36a0f18b08f048f9a53b7c0a26bd9e/interfaces/api_response.go#L28
 
 
-## 主要客户端实现
+## 客户端实现
 由于 miaospeed 的大部分功能体现为后端服务，因此需要自行实现客户端。可参考以下实现：
 * miaoko (闭源) 项目地址：无
 * koipy (初版开源，后续闭源) [项目地址](https://github.com/koipy-org/koipy) [项目文档](https://koipy.gitbook.io/koipy)
@@ -166,7 +158,7 @@ miaospeed 采用 AGPLv3 协议开源，您可以按照 AGPLv3 协议对 miaospee
 miaospeed 采用了如下的开源项目:
 
 - Dreamacro/clash [GPLv3]
-- MetaCubeX/Clash.Meta [GPLv3]
+- MetaCubeX/mihomo [GPLv3]
 - juju/ratelimit [LGPLv3]
 - dop251/goja [MIT]
 - json-iterator/go [MIT]

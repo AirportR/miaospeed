@@ -1,6 +1,6 @@
 package interfaces
 
-// Reverse connection protocol (reverse-v1).
+// Reverse connection protocol (msr-v1).
 //
 // When miaospeed runs with `-connect <url>` it dials OUT to a websocket
 // endpoint hosted by the client/panel (useful when the miaospeed host is
@@ -14,7 +14,7 @@ package interfaces
 // Message field names follow the existing miaospeed convention (PascalCase,
 // no json tags).
 
-const ReverseProtocolV1 = "reverse-v1"
+const ReverseProtocolV1 = "msr-v1"
 
 const (
 	ReverseMsgHello = "hello"

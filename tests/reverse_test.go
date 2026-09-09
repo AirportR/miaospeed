@@ -89,7 +89,7 @@ func startMockPanel(t *testing.T, token string, closeAfterAck bool) *mockPanel {
 }
 
 // TestReverseConnectTaskRoundTrip covers the whole reverse path: outbound
-// dial, reverse-v1 handshake, then a signed SlaveRequest that must come back
+// dial, msr-v1 handshake, then a signed SlaveRequest that must come back
 // as progress + result over the same connection.
 func TestReverseConnectTaskRoundTrip(t *testing.T) {
 	ensureTaskServer()

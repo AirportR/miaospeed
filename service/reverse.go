@@ -125,7 +125,7 @@ func isClientCloseError(err error) bool {
 	)
 }
 
-// runReverseSession dials the client, performs the reverse-v1 handshake and
+// runReverseSession dials the client, performs the msr-v1 handshake and
 // then serves the standard miaospeed protocol until the connection dies.
 func runReverseSession(slot int, rawURL string) error {
 	conn, resp, err := reverseDialer.Dial(rawURL, http.Header{})
