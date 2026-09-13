@@ -43,5 +43,7 @@ android/build/
 android/app/build/
 android/local.properties
 android/*.jks
+android/*.keystore
+android/keystore.properties
 android/.kotlin/
 android/app/src/main/jniLibs/
