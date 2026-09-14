@@ -35,15 +35,17 @@ import (
 //     backend's own shrinking, never a shrink that was requested;
 //   - while no control link is online the backend shrinks the pool on its own
 //     once its connections have been idle for reverseIdleTimeout, down to a floor
-//     of one connection.
-//
-// Autonomous shrinking is suspended whenever a control link is online, because
-// the client owns the pool then. The two mechanisms never fight.
+//     of one connection. Autonomous shrinking is suspended for as long as a
+//     control link is online, so the two mechanisms never fight.
 //
 // Idleness is measured by the client ping. A client that wants its connections
 // keeps pinging, including while it runs tasks, so a connection nobody pings is
 // one nobody uses. A client that never pings is never shrunk on the backend's
 // own initiative, which is what keeps clients predating this feature untouched.
+// The same signal picks the victim of a requested shrink: the most idle
+// connection goes first, so a task running on a connection its client still
+// pings is not interrupted. It is a proxy, not a guarantee: handleWsSession is
+// shared with the inbound listener, so real task activity cannot be observed.
 
 const (
 	// reverseDefaultPoolSize is the pool used until the client negotiates a
@@ -61,6 +63,12 @@ const (
 	// reverseStableLink: a link alive this long resets the backoff curve on loss.
 	reverseStableLink = 30 * time.Second
 
+	// reverseMinClientCloseLink: a link closed politely but alive for less than
+	// this counts as a failed dial, not as a client asking to be redialed.
+	// Without the floor, a peer that accepts and immediately drops connections
+	// would be redialed with no backoff at all, forever.
+	reverseMinClientCloseLink = 1 * time.Second
+
 	// Clamp the client-requested heartbeat so it can neither force a ping
 	// storm nor push the read window past useful liveness detection.
 	reverseHeartbeatMinSecs = 10
@@ -70,8 +78,10 @@ const (
 	// outside of a session (pong replies and graceful closes).
 	reverseControlWriteWait = 1 * time.Second
 
-	// reverseScaleReplyTimeout bounds how long a control link waits for the
-	// supervisor to apply one ReverseScale.
+	// reverseScaleReplyTimeout bounds how long a control link waits for one
+	// ReverseScale to be applied. The handoff to the supervisor and its reply
+	// share this single deadline, so the total wait is bounded by it rather
+	// than by twice it. Clients must allow for more than this value.
 	reverseScaleReplyTimeout = 5 * time.Second
 )
 
@@ -166,9 +176,8 @@ type endpointPool struct {
 	controlOnline bool
 	ackDrives     bool
 	// retiring counts sessions that already committed to an autonomous
-	// retirement but are still listed in the pool. The floor is checked against
-	// desired-retiring, so two sessions that go idle at the same instant can
-	// never both leave and drop the endpoint below one connection.
+	// retirement but are still listed in the pool. See
+	// reserveAutonomousRetirement for how the floor uses it.
 	retiring int
 }
 
@@ -242,6 +251,15 @@ type sessionActivity struct {
 	pinged atomic.Bool
 }
 
+// newSessionActivity starts the clock at creation time. Without that, a slot
+// that has not connected yet would read as idle since the epoch and look like
+// the best candidate for a shrink.
+func newSessionActivity() *sessionActivity {
+	activity := &sessionActivity{}
+	activity.touch()
+	return activity
+}
+
 // touch marks the connection as alive without claiming a client ping was seen.
 func (a *sessionActivity) touch() {
 	a.lastNs.Store(time.Now().UnixNano())
@@ -284,6 +302,10 @@ type reverseSessionSlot struct {
 	rawURL string
 	pool   *endpointPool
 
+	// activity is owned by the worker but kept on the slot so the supervisor can
+	// compare slots and retire the most idle one.
+	activity *sessionActivity
+
 	// retire is signalled by the supervisor when this slot must go away. It is
 	// buffered so the supervisor never blocks on a busy worker.
 	retire chan struct{}
@@ -303,7 +325,6 @@ func (s *reverseSessionSlot) name() string {
 // run owns this slot until the supervisor retires it. It never returns on its
 // own: losing a link only schedules a redial.
 func (s *reverseSessionSlot) run() {
-	activity := &sessionActivity{}
 	onAck := func(ack *interfaces.ReverseAck) {
 		select {
 		case s.acked <- ack:
@@ -312,7 +333,7 @@ func (s *reverseSessionSlot) run() {
 	}
 
 	err := reverseRetryLoop(s.label, s.name(), func() error {
-		return runReverseSession(s, activity, onAck)
+		return runReverseSession(s, onAck)
 	}, s.retire)
 
 	select {
@@ -339,13 +360,14 @@ func runEndpointSupervisor(label string, rawURL string) {
 
 	spawn := func() {
 		slot := &reverseSessionSlot{
-			label:  label,
-			id:     nextID,
-			rawURL: rawURL,
-			pool:   pool,
-			retire: make(chan struct{}, 1),
-			acked:  acked,
-			exited: exited,
+			label:    label,
+			id:       nextID,
+			rawURL:   rawURL,
+			pool:     pool,
+			activity: newSessionActivity(),
+			retire:   make(chan struct{}, 1),
+			acked:    acked,
+			exited:   exited,
 		}
 		nextID++
 		slots = append(slots, slot)
@@ -364,8 +386,9 @@ func runEndpointSupervisor(label string, rawURL string) {
 	}
 	shrinkTo := func(target int) {
 		for len(slots) > target {
-			victim := slots[len(slots)-1]
-			slots = slots[:len(slots)-1]
+			idx := mostIdleSlotIndex(slots)
+			victim := slots[idx]
+			slots = append(slots[:idx], slots[idx+1:]...)
 			select {
 			case victim.retire <- struct{}{}:
 			default: // already asked to retire
@@ -447,6 +470,21 @@ func clampReversePoolSize(size int) int {
 	}
 }
 
+// mostIdleSlotIndex picks the slot a requested shrink should take away. The
+// client ping is the only liveness signal the backend has, so "the one that has
+// been quiet longest" is the closest it can get to "the one nobody is using",
+// and strictly better than picking the newest slot, which can be the one a task
+// is running on. Ties go to the lowest index, which is also the oldest slot.
+func mostIdleSlotIndex(slots []*reverseSessionSlot) int {
+	best := 0
+	for i := 1; i < len(slots); i++ {
+		if slots[i].activity.idleFor() > slots[best].activity.idleFor() {
+			best = i
+		}
+	}
+	return best
+}
+
 // runControlLink keeps at most one control connection alive for an endpoint and
 // relays ReverseScale requests to the supervisor. It is only started for
 // endpoints whose client advertised control support, and it is never part of the
@@ -518,23 +556,29 @@ func runControlSession(label, rawURL string, scale chan<- scaleRequest, online c
 	}
 }
 
-// applyScale hands a ReverseScale to the supervisor and waits for the applied value.
+// applyScale hands a ReverseScale to the supervisor and waits for the applied
+// value. Both waits share one deadline, so a slow supervisor costs at most
+// reverseScaleReplyTimeout in total instead of once per step.
 func applyScale(scale chan<- scaleRequest, pool int, seq int64) (int, error) {
 	req := scaleRequest{pool: pool, seq: seq, reply: make(chan int, 1)}
+	deadline := time.NewTimer(reverseScaleReplyTimeout)
+	defer deadline.Stop()
+
 	select {
 	case scale <- req:
-	case <-time.After(reverseScaleReplyTimeout):
+	case <-deadline.C:
 		return 0, errors.New("backend is busy, retry later")
 	}
 	select {
 	case applied := <-req.reply:
 		return applied, nil
-	case <-time.After(reverseScaleReplyTimeout):
+	case <-deadline.C:
 		return 0, errors.New("backend did not apply the scale in time")
 	}
 }
 
-// dialReverse dials one reverse endpoint and returns the connection
+// dialReverse dials one reverse endpoint and returns the connection along with
+// its remote address, for logs.
 func dialReverse(rawURL string) (*websocket.Conn, string, error) {
 	conn, resp, err := reverseDialer.Dial(rawURL, http.Header{})
 	if err != nil {
@@ -563,7 +607,9 @@ func reverseHeartbeat(ack *interfaces.ReverseAck) (secs int64, interval, readWin
 	return secs, interval, 2 * interval
 }
 
-// reverseSetupKeepalive arms the read deadline renewal shared by session
+// reverseSetupKeepalive arms the read deadline renewal shared by session and
+// control links: every pong the client sends pushes the window forward, so a
+// link is declared dead only after two heartbeat intervals of silence.
 func reverseSetupKeepalive(conn *websocket.Conn, readWindow time.Duration) {
 	_ = conn.SetReadDeadline(time.Now().Add(readWindow))
 	conn.SetPongHandler(func(string) error {
@@ -573,7 +619,8 @@ func reverseSetupKeepalive(conn *websocket.Conn, readWindow time.Duration) {
 
 // runReverseSession dials the client, performs the msr-v1 handshake and then
 // serves the standard miaospeed protocol until the connection dies.
-func runReverseSession(slot *reverseSessionSlot, activity *sessionActivity, onAck func(*interfaces.ReverseAck)) error {
+func runReverseSession(slot *reverseSessionSlot, onAck func(*interfaces.ReverseAck)) error {
+	activity := slot.activity
 	conn, remote, err := dialReverse(slot.rawURL)
 	if err != nil {
 		return err
@@ -686,7 +733,7 @@ func closeGracefully(conn *websocket.Conn) {
 	_ = conn.Close()
 }
 
-// reverseRetryLoop drives one reverse link until it is retired
+// reverseRetryLoop drives one reverse link until it is retired.
 func reverseRetryLoop(label, what string, serve func() error, retire <-chan struct{}) error {
 	backoff := reverseBackoffBase
 	for {
@@ -696,7 +743,11 @@ func reverseRetryLoop(label, what string, serve func() error, retire <-chan stru
 			utils.DLogf("MiaoSpeed Reverse | [%s] %s retired", label, what)
 			return err
 		}
-		if errors.Is(err, errClientClosed) {
+		// A polite close means "redial now, I will be back", but only if the
+		// link actually lived. A peer that accepts and drops at once would
+		// otherwise be redialed in a tight loop, so a short-lived polite close
+		// falls through to the backoff path below.
+		if errors.Is(err, errClientClosed) && time.Since(started) >= reverseMinClientCloseLink {
 			backoff = reverseBackoffBase
 			continue
 		}

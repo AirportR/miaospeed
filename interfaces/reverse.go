@@ -12,6 +12,20 @@ package interfaces
 // connection speaks the exact same SlaveRequest/SlaveResponse protocol as the
 // inbound server mode, with roles unchanged (the client still sends requests,
 // miaospeed still computes and streams results).
+//
+// Resizing a pool (the policy lives in service/reverse.go):
+//
+//   - a client that sets ReverseAck.Control also gets one dedicated control
+//     connection per endpoint. Its ReverseHello carries Role "control", it
+//     never carries a task, and it is never part of the pool;
+//   - the client then sends ReverseScale over that link to ask for a pool size,
+//     in either direction, and miaospeed answers ReverseScaleAck with the size
+//     it really applied. Both frames share the "scale" type, so a reader has to
+//     know which direction it is looking at;
+//   - Seq is per control connection and is a correlation id only: the client
+//     numbers its own requests and miaospeed echoes the number back without
+//     ever deduping on it. A control link that reconnects starts over at zero,
+//     which is safe because the previous link's replies cannot reach it.
 
 const ReverseProtocolV1 = "msr-v1"
 
@@ -22,12 +36,9 @@ const (
 	ReverseMsgScale = "scale"
 )
 
-// Reverse connection roles, carried by ReverseHello.Role.
-// an empty role therefore means "session".
-const (
-	ReverseRoleSession = "session"
-	ReverseRoleControl = "control"
-)
+// ReverseRoleControl is the ReverseHello.Role of a control connection. A plain
+// task session sends no role at all, so an empty Role means "session".
+const ReverseRoleControl = "control"
 
 // ReverseHello is the first message sent by miaospeed over a freshly
 // dialed reverse connection.
@@ -54,7 +65,7 @@ type ReverseAck struct {
 	SessionID string // session id assigned by the client to this pooled connection, for log correlation
 	Heartbeat int64  // requested ping/pong interval in seconds, 0 = backend default (30s)
 	MaxTasks  int    // suggested max concurrent tasks per connection, 0 = unlimited; logged only
-	Pool      int    // initial connections for this endpoint, 0 = backend default (1); superseded by ReverseScale once a control link is online
+	Pool      int    // initial connections for this endpoint, 0 = backend default (1); drives growth only, and stops mattering once a control link is online
 	Control   bool   // client understands Role "control" and serves control links; false for clients that predate the feature
 	Error     string // rejection reason when Type != "ack"
 }
@@ -64,10 +75,11 @@ type ReverseAck struct {
 type ReverseScale struct {
 	Type string // "scale"
 	Pool int    // desired connections for this endpoint
-	Seq  int64  // client sequence number, echoed back for correlation
+	Seq  int64  // per control connection, echoed back in ReverseScaleAck.Seq
 }
 
-// ReverseScaleAck reports the outcome of one ReverseScale.
+// ReverseScaleAck reports the outcome of one ReverseScale. It shares the "scale"
+// type with the request, so it is only ever read on the control link.
 type ReverseScaleAck struct {
 	Type  string // "scale"
 	Seq   int64  // echo of ReverseScale.Seq

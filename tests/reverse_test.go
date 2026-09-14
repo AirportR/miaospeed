@@ -47,6 +47,13 @@ type mockPanel struct {
 	// live counts the session connections that are open right now. It only moves
 	// when the panel owns the session connections itself.
 	live atomic.Int64
+	// liveIdx holds the handshake index of every session connection that is open
+	// right now. `live` only says how many survived; a test that has to know
+	// *which* one a shrink took away reads this instead.
+	liveIdx sync.Map
+	// pinged carries the handshake index of every session connection the panel
+	// drives a heartbeat on, in the order they started pinging.
+	pinged chan int
 	// controlRejected makes the panel refuse every future control connection, so
 	// a test can observe the backend once the client stops managing the pool.
 	controlRejected atomic.Bool
@@ -74,6 +81,11 @@ type mockPanelOptions struct {
 	// quiet. pingTimes <= 0 means keep pinging until the connection ends.
 	pingEvery time.Duration
 	pingTimes int
+	// quietFirstSessions leaves the first N session handshakes without a
+	// heartbeat. The connections dialed afterwards are then the ones that look
+	// in use, which is what a test needs to tell "retire the idle one" apart
+	// from "retire the newest one".
+	quietFirstSessions int
 }
 
 // startMockPanel runs a websocket server that plays the client/panel role of
@@ -102,6 +114,7 @@ func startMockPanelWith(t *testing.T, opts mockPanelOptions) *mockPanel {
 		Conns:     make(chan *websocket.Conn, 64),
 		Control:   make(chan *websocket.Conn, 8),
 		rawHellos: make(chan string, 64),
+		pinged:    make(chan int, 8),
 		pools:     opts.pools,
 	}
 	up := websocket.Upgrader{}
@@ -137,6 +150,7 @@ func startMockPanelWith(t *testing.T, opts mockPanelOptions) *mockPanel {
 		// client predating the control link would send.
 		control := hello.Role == interfaces.ReverseRoleControl
 		pool := 0
+		index := -1
 		if control {
 			panel.controls.Add(1)
 			pool = controlAckPool
@@ -146,9 +160,9 @@ func startMockPanelWith(t *testing.T, opts mockPanelOptions) *mockPanel {
 				return
 			}
 		} else {
-			session := int(panel.sessions.Add(1)) - 1
+			index = int(panel.sessions.Add(1)) - 1
 			if len(panel.pools) > 0 {
-				pool = panel.pools[min(session, len(panel.pools)-1)]
+				pool = panel.pools[min(index, len(panel.pools)-1)]
 			}
 		}
 
@@ -181,7 +195,7 @@ func startMockPanelWith(t *testing.T, opts mockPanelOptions) *mockPanel {
 			return
 		}
 		if opts.ownSessions {
-			panel.watchSession(conn, opts)
+			panel.watchSession(conn, opts, index)
 			return
 		}
 		select {
@@ -201,11 +215,17 @@ func startMockPanelWith(t *testing.T, opts mockPanelOptions) *mockPanel {
 // watchSession makes the panel own a session connection: it stays the only
 // reader, which is what lets it track liveness for pool assertions, and it
 // optionally drives the client heartbeat the backend reads as a sign of life.
-func (p *mockPanel) watchSession(conn *websocket.Conn, opts mockPanelOptions) {
+func (p *mockPanel) watchSession(conn *websocket.Conn, opts mockPanelOptions, index int) {
 	p.live.Add(1)
+	p.liveIdx.Store(index, struct{}{})
 	go func() {
 		defer p.live.Add(-1)
-		if opts.pingEvery > 0 {
+		defer p.liveIdx.Delete(index)
+		if opts.pingEvery > 0 && index >= opts.quietFirstSessions {
+			select {
+			case p.pinged <- index:
+			default: // nobody is counting pings right now
+			}
 			go pingLoop(conn, opts.pingEvery, opts.pingTimes)
 		}
 		for {
@@ -214,6 +234,13 @@ func (p *mockPanel) watchSession(conn *websocket.Conn, opts mockPanelOptions) {
 			}
 		}
 	}()
+}
+
+// sessionAlive reports whether the session connection with this handshake index
+// is still open, which is what lets a shrink test name the victim.
+func (p *mockPanel) sessionAlive(index int) bool {
+	_, ok := p.liveIdx.Load(index)
+	return ok
 }
 
 // pingLoop pings the backend the way a client would. A finite times models a
@@ -705,6 +732,90 @@ func TestReverseConnectControlGrowShrink(t *testing.T) {
 	waitLive(t, panel, 1, 20*time.Second)
 	// The floor holds even though every connection is idle by now.
 	assertLiveStable(t, panel, 1, 700*time.Millisecond)
+}
+
+// TestReverseConnectControlShrinkWithPingingClient pins the fix in 8cd6664: a
+// client that keeps pinging, so the autonomous idle gate can never expire, must
+// still see a shrink it asked for applied at once. Every other shrink test lets
+// its client fall silent right after the handshake, which is exactly why they
+// passed before the fix and could never have caught it: the gate was already
+// open when they shrunk.
+func TestReverseConnectControlShrinkWithPingingClient(t *testing.T) {
+	ensureTaskServer()
+	withShortReverseIdleTimeout(t, 500*time.Millisecond)
+
+	token := "reverse-pingshrink-token"
+	panel := startMockPanelWith(t, mockPanelOptions{
+		token:            token,
+		pools:            []int{3},
+		advertiseControl: true,
+		ownSessions:      true,
+		pingEvery:        20 * time.Millisecond,
+		pingTimes:        -1, // keeps pinging, like a client that is still busy
+	})
+	withReverseGlobals(t, token, panel.URL)
+	go service.RunReverseConnector()
+
+	waitLive(t, panel, 3, 20*time.Second)
+	control := waitForControlConn(t, panel, 20*time.Second)
+
+	// Well past the idle threshold: only the pings keep these connections alive,
+	// so nothing has been retired on the backend's own initiative by now.
+	assertLiveStable(t, panel, 3, 1200*time.Millisecond)
+
+	if got := scalePool(t, control, 1, 1).Pool; got != 1 {
+		t.Fatalf("ReverseScale{Pool:1} applied %d, want 1", got)
+	}
+	waitLive(t, panel, 1, 20*time.Second)
+	assertLiveStable(t, panel, 1, 700*time.Millisecond)
+}
+
+// TestReverseConnectShrinkRetiresTheIdleConnection pins which connection a
+// client-requested shrink takes away. The backend cannot see task activity
+// (handleWsSession is shared with the inbound listener), so the client ping is
+// the only signal it has, and the connection nobody is pinging any more is the
+// one that should go, since the other one may be carrying a task. Retiring the
+// newest slot instead, which is what the code used to do, takes away exactly
+// the connection that is in use here.
+func TestReverseConnectShrinkRetiresTheIdleConnection(t *testing.T) {
+	ensureTaskServer()
+	withShortReverseIdleTimeout(t, 500*time.Millisecond)
+
+	token := "reverse-idlevictim-token"
+	panel := startMockPanelWith(t, mockPanelOptions{
+		token:              token,
+		advertiseControl:   true,
+		ownSessions:        true,
+		pingEvery:          20 * time.Millisecond,
+		pingTimes:          -1,
+		quietFirstSessions: 1,
+	})
+	withReverseGlobals(t, token, panel.URL)
+	go service.RunReverseConnector()
+
+	waitLive(t, panel, 1, 20*time.Second)
+	control := waitForControlConn(t, panel, 20*time.Second)
+
+	// The probe connection is the quiet one, so the connection dialed for this
+	// grow is the one that looks in use, and it is also the newest slot.
+	if got := scalePool(t, control, 2, 1).Pool; got != 2 {
+		t.Fatalf("ReverseScale{Pool:2} applied %d, want 2", got)
+	}
+	waitLive(t, panel, 2, 20*time.Second)
+	pinger := <-panel.pinged
+
+	// Let the two drift apart: one keeps reporting in, one has gone silent.
+	time.Sleep(300 * time.Millisecond)
+
+	if got := scalePool(t, control, 1, 2).Pool; got != 1 {
+		t.Fatalf("ReverseScale{Pool:1} applied %d, want 1", got)
+	}
+	waitLive(t, panel, 1, 20*time.Second)
+	assertLiveStable(t, panel, 1, 700*time.Millisecond)
+	if !panel.sessionAlive(pinger) {
+		t.Fatalf("the shrink retired session %d, the one whose client kept pinging; "+
+			"it must spare the connection that still looks in use", pinger)
+	}
 }
 
 // TestReverseConnectControlClampsPool checks out of range ReverseScale values are
