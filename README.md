@@ -30,7 +30,7 @@ miaospeed 是一个使用 Go 编写的代理服务器性能测试解决方案。
 - 支持主流出站代理协议：Shadowsocks、Vmess、VLESS、Trojan、Hysteria2、AnyTLS 等。
 - 丰富的测试参数配置，支持自定义请求体、超时、并发数等。
 - 支持自定义 JavaScript 测试脚本，可实现自定义测试逻辑。
-- 支持反向连接：后端位于 NAT 后没有公网时，可主动外连到有公网的客户端，支持同时外连多个端点。
+- 支持反向连接：后端位于 NAT 后没有公网时，可主动外连到有公网的客户端，支持同时外连多个端点，连接池可经控制连接动态调整。
 
 ## 基本用法
 
@@ -93,45 +93,6 @@ curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed
 ./miaospeed server -connect wss://a.example.com/reverse,wss://b.example.com/reverse -token YOUR_TOKEN
 ```
 
-- 多个端点之间**完全独立**：每个端点有各自的连接池与各自的重连退避，某个端点宕机不会影响其它端点。
-- 所有端点共用同一个 `-token`。
-- 端点 URL 必须是 `ws://` 或 `wss://` 且带 host。**格式错误的 URL 会导致启动失败并退出**。
-- `-connect` 可与 `-bind` 同时使用（本地监听与反连并行）；只给 `-connect` 时不开启本地监听。
-- 除 `-token` 外，其余服务端参数（`-connthread`、`-speedlimit`、`-nospeed` 等）在反连模式下同样生效。
-- 出站连接带 ping/pong 心跳（默认 30s，可被客户端在 ack 中覆盖）；`wss` 使用系统根证书校验。
-
-**客户端握手协议**（`msr-v1`）：
-
-1. 客户端提供一个 WebSocket 端点接收 miaospeed 的主动连接。连接建立后，miaospeed 会发送第一条 JSON 消息 `ReverseHello`：
-
-| 字段 | 说明 |
-| --- | --- |
-| `Type` | 固定为 `"hello"` |
-| `Protocol` | 协议版本，当前为 `"msr-v1"` |
-| `Version` | miaospeed 版本号 |
-| `Nonce` | 随机字符串 |
-| `Timestamp` | Unix 秒级时间戳 |
-| `Sign` | `hashMiaoSpeed(token, "reverse-hello\|" + Nonce + "\|" + Timestamp)` |
-
-2. 客户端用同一 `token` 校验 `Sign`，然后发送 `ReverseAck`：
-
-| 字段 | 说明                                                      |
-| --- |---------------------------------------------------------|
-| `Type` | `"ack"` 表示接受；其他值为拒绝，miaospeed 会断开并退避重试                  |
-| `Protocol` | 原样返回 `msr-v1`，版本协商锚点                                    |
-| `Sign` | `hashMiaoSpeed(token, hello.Sign)`，证明客户端持有同一token（双向认证） |
-| `Version` / `Name` | 面板版本与名称，仅用于日志                                           |
-| `Timestamp` | 面板时间戳，用于时钟偏差排查                                          |
-| `SessionID` | 面板为该连接分配的会话 ID，用于日志关联                                   |
-| `Heartbeat` | 心跳间隔（秒），`0` 表示使用后端默认 30s                                |
-| `MaxTasks` | 建议的单连接最大并发任务数，`0` 表示不限制（后端仅记录）                          |
-| `Pool` | 该端点应维持的连接数，`0` 表示使用后端默认值 `1`；后端只扩容不缩容，上限 16             |
-| `Error` | 拒绝原因，`Type != "ack"` 时使用                                |
-
-
-
-完整实现可参考 `tests/reverse_test.go` 中的 mock panel。
-
 ### 预编译二进制说明
 
 仓库提供的预编译二进制文件与闭源客户端 **Miaoko 兼容**。
@@ -154,9 +115,10 @@ MIAOKO4|580JxAo049R|GEnERAl|1X571R930|T0kEN
 
 
 ## 客户端实现
-由于 miaospeed 的大部分功能体现为后端服务，因此需要自行实现客户端。可参考以下实现：
+由于 miaospeed 的大部分功能体现为服务端，因此需要自行实现客户端。可参考以下实现：
 * miaoko (闭源) 项目地址：无
 * koipy (初版开源，后续闭源) [项目地址](https://github.com/koipy-org/koipy) [项目文档](https://koipy.gitbook.io/koipy)
+* Waku (闭源商用) [参考文档](https://scx.gitbook.io/)
 
 如未来有其他客户端实现，欢迎贡献。
 ## 版权与协议

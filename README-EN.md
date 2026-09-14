@@ -30,7 +30,7 @@ miaospeed is a performance testing tool for proxy servers, written in Go.
 - Supports mainstream outbound proxies Shadowsocks, Vmess, VLESS, Trojan, Hysteria2, AnyTLS, etc.
 - Rich testing parameter configuration, supporting custom request body, timeout, concurrency, etc.
 - Custom javascript testing script support, supporting custom testing logic
-- Reverse connection support: when the backend sits behind NAT without a public ip, it can dial OUT to clients that do have one, and it can serve several endpoints at the same time.
+- Reverse connection support: when the backend sits behind NAT without a public ip, it can dial OUT to clients that do have one, it can serve several endpoints at the same time, and a control connection can resize each pool on the fly.
 
 
 ## Basic Usage
@@ -95,43 +95,6 @@ In the normal mode miaospeed listens on a port and waits for clients (panels) to
 ./miaospeed server -connect wss://a.example.com/reverse,wss://b.example.com/reverse -token YOUR_TOKEN
 ```
 
-- Endpoints are fully independent: each one keeps its own connection pool and its own reconnect backoff, so an endpoint that is down never affects the others.
-- Every endpoint shares the same `-token`.
-- An endpoint url must be `ws://` or `wss://` and carry a host. **A malformed url aborts startup.**
-- `-connect` works together with `-bind` (inbound listener and reverse connections in parallel); with only `-connect` no inbound listener is started.
-- Apart from `-token`, all server options (`-connthread`, `-speedlimit`, `-nospeed`, ...) apply to reverse connections as well.
-- Outbound connections carry ping/pong heartbeats (30s by default, overridable by the client in the ack); `wss` validates against the system root certificates.
-
-**Client handshake protocol** (`msr-v1`):
-
-1. The client exposes a websocket endpoint that accepts miaospeed's outbound connection. Once established, miaospeed sends the first JSON message, `ReverseHello`:
-
-| Field | Description |
-| --- | --- |
-| `Type` | always `"hello"` |
-| `Protocol` | protocol version, currently `"msr-v1"` |
-| `Version` | miaospeed version |
-| `Nonce` | random string |
-| `Timestamp` | unix seconds |
-| `Sign` | `hashMiaoSpeed(token, "reverse-hello\|" + Nonce + "\|" + Timestamp)` |
-
-2. The client verifies `Sign` with the same `token`, then replies with `ReverseAck`:
-
-| Field | Description |
-| --- | --- |
-| `Type` | `"ack"` accepts; any other value rejects, miaospeed drops the connection and retries with backoff |
-| `Protocol` | echo `msr-v1`, the version negotiation anchor |
-| `Sign` | `hashMiaoSpeed(token, hello.Sign)`, proving the client holds the same token (mutual authentication) |
-| `Version` / `Name` | panel version and name, logs only |
-| `Timestamp` | panel unix seconds, for clock skew inspection |
-| `SessionID` | session id the panel assigns to this connection, for log correlation |
-| `Heartbeat` | heartbeat interval in seconds, `0` means the backend default of 30s |
-| `MaxTasks` | suggested max concurrent tasks per connection, `0` means unlimited (backend logs it only) |
-| `Pool` | connections the backend should keep for this endpoint, `0` means the backend default of `1`; pools only grow, capped at 16 |
-| `Error` | rejection reason, used when `Type != "ack"` |
-
-A complete implementation is available as the mock panel in `tests/reverse_test.go`.
-
 ### Pre-compiled Binary Instructions
 
 The pre-compiled binaries in this repository are **compatible** with the original closed-source client Miaoko.
@@ -155,9 +118,10 @@ If you want to integrate miaospeed in other services, please refer to the client
 
 ## Main Client Implementations
 
-Since most of miaospeed’s functionality resides in the backend server, clients need to be implemented separately. You can refer to the following client implementations:
+Since most of miaospeed’s functionality resides in the server, clients need to be implemented separately. You can refer to the following client implementations:
 * miaoko (closed-source) Project address: None
 * koipy (initially open-source, later closed-source) [Project address](https://github.com/koipy-org/koipy) [Project documentation](https://koipy.gitbook.io/koipy)
+* Waku (closed-source, commercial) [Documentation](https://scx.gitbook.io/)
 
 If there are other client implementations in the future, feel free to contribute
 
