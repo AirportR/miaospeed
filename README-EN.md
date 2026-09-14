@@ -30,6 +30,7 @@ miaospeed is a performance testing tool for proxy servers, written in Go.
 - Supports mainstream outbound proxies Shadowsocks, Vmess, VLESS, Trojan, Hysteria2, AnyTLS, etc.
 - Rich testing parameter configuration, supporting custom request body, timeout, concurrency, etc.
 - Custom javascript testing script support, supporting custom testing logic
+- Reverse connection support: when the backend sits behind NAT without a public ip, it can dial OUT to clients that do have one, and it can serve several endpoints at the same time.
 
 
 ## Basic Usage
@@ -78,6 +79,58 @@ After you have created the above files, you can run `go build .` to build `miaos
 ### TLS and Client Certificates
 
 `-mtls` enables the server TLS certificate so clients can verify the server identity. To verify client certificates when clients present them, also pass `-clientca <path>` with the trusted client CA certificate. This mode is optional client certificate verification: a presented client certificate must chain to that CA, while clients without a certificate continue to connect through the existing logic.
+
+### Reverse Connection
+
+In the normal mode miaospeed listens on a port and waits for clients (panels) to connect. When the machine running miaospeed has **no public ip** while the client does, miaospeed can **dial out** to the client instead:
+
+```shell
+./miaospeed server -connect wss://panel.example.com/reverse -token YOUR_TOKEN
+```
+
+`-connect` can be repeated, or its urls separated by commas, so a single backend serves several endpoints at once:
+
+```shell
+./miaospeed server -connect wss://a.example.com/reverse -connect wss://b.example.com/reverse -token YOUR_TOKEN
+./miaospeed server -connect wss://a.example.com/reverse,wss://b.example.com/reverse -token YOUR_TOKEN
+```
+
+- Endpoints are fully independent: each one keeps its own connection pool and its own reconnect backoff, so an endpoint that is down never affects the others.
+- Every endpoint shares the same `-token`.
+- An endpoint url must be `ws://` or `wss://` and carry a host. **A malformed url aborts startup.**
+- `-connect` works together with `-bind` (inbound listener and reverse connections in parallel); with only `-connect` no inbound listener is started.
+- Apart from `-token`, all server options (`-connthread`, `-speedlimit`, `-nospeed`, ...) apply to reverse connections as well.
+- Outbound connections carry ping/pong heartbeats (30s by default, overridable by the client in the ack); `wss` validates against the system root certificates.
+
+**Client handshake protocol** (`msr-v1`):
+
+1. The client exposes a websocket endpoint that accepts miaospeed's outbound connection. Once established, miaospeed sends the first JSON message, `ReverseHello`:
+
+| Field | Description |
+| --- | --- |
+| `Type` | always `"hello"` |
+| `Protocol` | protocol version, currently `"msr-v1"` |
+| `Version` | miaospeed version |
+| `Nonce` | random string |
+| `Timestamp` | unix seconds |
+| `Sign` | `hashMiaoSpeed(token, "reverse-hello\|" + Nonce + "\|" + Timestamp)` |
+
+2. The client verifies `Sign` with the same `token`, then replies with `ReverseAck`:
+
+| Field | Description |
+| --- | --- |
+| `Type` | `"ack"` accepts; any other value rejects, miaospeed drops the connection and retries with backoff |
+| `Protocol` | echo `msr-v1`, the version negotiation anchor |
+| `Sign` | `hashMiaoSpeed(token, hello.Sign)`, proving the client holds the same token (mutual authentication) |
+| `Version` / `Name` | panel version and name, logs only |
+| `Timestamp` | panel unix seconds, for clock skew inspection |
+| `SessionID` | session id the panel assigns to this connection, for log correlation |
+| `Heartbeat` | heartbeat interval in seconds, `0` means the backend default of 30s |
+| `MaxTasks` | suggested max concurrent tasks per connection, `0` means unlimited (backend logs it only) |
+| `Pool` | connections the backend should keep for this endpoint, `0` means the backend default of `1`; pools only grow, capped at 16 |
+| `Error` | rejection reason, used when `Type != "ack"` |
+
+A complete implementation is available as the mock panel in `tests/reverse_test.go`.
 
 ### Pre-compiled Binary Instructions
 

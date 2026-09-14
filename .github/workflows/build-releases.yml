@@ -97,14 +97,12 @@ jobs:
           KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           if [ -n "$KS_B64" ]; then
-            # Secret 可能混入 CRLF / 空格 / 折行（Windows 复制粘贴常见），
-            # GNU base64 -d 只容忍 \n，遇到 \r 之类的字符会直接报 "invalid input"，所以先统一清掉所有空白。
             if ! printf '%s' "$KS_B64" | tr -d ' \t\r\n' | base64 -d > android/keystore.jks; then
-              echo "::error::ANDROID_KEYSTORE_BASE64 不是合法 base64：请确认内容是纯 base64（没有 CRLF/空格），也不是 certutil -encode 那种带 -----BEGIN ...----- 头尾的输出"
+              echo "::error::ANDROID_KEYSTORE_BASE64 不是合法 base64"
               exit 1
             fi
             if [ ! -s android/keystore.jks ]; then
-              echo "::error::ANDROID_KEYSTORE_BASE64 解码后为空，请确认该 secret 已正确设置"
+              echo "::error::ANDROID_KEYSTORE_BASE64 请确认该 secret 已正确设置"
               exit 1
             fi
             printf 'storeFile=keystore.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \

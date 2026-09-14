@@ -4,15 +4,17 @@ package interfaces
 //
 // When miaospeed runs with `-connect <url>` it dials OUT to a websocket
 // endpoint hosted by the client/panel (useful when the miaospeed host is
-// behind NAT and the panel has a public address). After the websocket is
-// established, miaospeed sends a ReverseHello and waits for a ReverseAck;
-// once the ack is accepted, the connection speaks the exact same
-// SlaveRequest/SlaveResponse protocol as the inbound server mode, with
-// roles unchanged (the client still sends requests, miaospeed still
-// computes and streams results).
+// behind NAT and the panel has a public address). `-connect` may be given
+// more than once (or comma separated) to serve several endpoints at the same
+// time; every endpoint keeps its own pool of connections and its own
+// reconnect backoff. After the websocket is established, miaospeed sends a
+// ReverseHello and waits for a ReverseAck; once the ack is accepted, the
+// connection speaks the exact same SlaveRequest/SlaveResponse protocol as the
+// inbound server mode, with roles unchanged (the client still sends requests,
+// miaospeed still computes and streams results).
 //
 // Message field names follow the existing miaospeed convention (PascalCase,
-// no json tags).
+// no JSON tags).
 
 const ReverseProtocolV1 = "msr-v1"
 
@@ -46,5 +48,6 @@ type ReverseAck struct {
 	SessionID string // session id assigned by the client to this pooled connection, for log correlation
 	Heartbeat int64  // requested ping/pong interval in seconds, 0 = backend default (30s)
 	MaxTasks  int    // suggested max concurrent tasks per connection, 0 = unlimited; logged only
+	Pool      int    // connections the backend should keep for this endpoint, 0 = backend default (1)
 	Error     string // rejection reason when Type != "ack"
 }

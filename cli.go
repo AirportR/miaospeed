@@ -61,6 +61,8 @@ func RunCliDefault() {
 	fmt.Printf("        start the miaospeed backend as a server.\n")
 	fmt.Printf("        use -connect to dial OUT to a client when this host has no public ip:\n")
 	fmt.Printf("        %s server -connect wss://panel.example.com/reverse -token YOUR_TOKEN\n", cmdName)
+	fmt.Printf("        -connect can be repeated (or comma separated) to serve several endpoints:\n")
+	fmt.Printf("        %s server -connect wss://a.example.com/reverse -connect wss://b.example.com/reverse -token YOUR_TOKEN\n", cmdName)
 	fmt.Printf("  script\n")
 	fmt.Printf("        run a temporary script test to test the correctness of your script.\n")
 	fmt.Printf("  misc\n")

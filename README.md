@@ -30,7 +30,7 @@ miaospeed 是一个使用 Go 编写的代理服务器性能测试解决方案。
 - 支持主流出站代理协议：Shadowsocks、Vmess、VLESS、Trojan、Hysteria2、AnyTLS 等。
 - 丰富的测试参数配置，支持自定义请求体、超时、并发数等。
 - 支持自定义 JavaScript 测试脚本，可实现自定义测试逻辑。
-- 支持反向连接：后端位于 NAT 后没有公网时，可主动外连到有公网的客户端。
+- 支持反向连接：后端位于 NAT 后没有公网时，可主动外连到有公网的客户端，支持同时外连多个端点。
 
 ## 基本用法
 
@@ -86,10 +86,19 @@ curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed
 ./miaospeed server -connect wss://panel.example.com/reverse -token YOUR_TOKEN
 ```
 
+`-connect` 可以重复传入，也可以用逗号分隔，让一个后端同时服务多个端点：
+
+```shell
+./miaospeed server -connect wss://a.example.com/reverse -connect wss://b.example.com/reverse -token YOUR_TOKEN
+./miaospeed server -connect wss://a.example.com/reverse,wss://b.example.com/reverse -token YOUR_TOKEN
+```
+
+- 多个端点之间**完全独立**：每个端点有各自的连接池与各自的重连退避，某个端点宕机不会影响其它端点。
+- 所有端点共用同一个 `-token`。
+- 端点 URL 必须是 `ws://` 或 `wss://` 且带 host。**格式错误的 URL 会导致启动失败并退出**。
 - `-connect` 可与 `-bind` 同时使用（本地监听与反连并行）；只给 `-connect` 时不开启本地监听。
 - 除 `-token` 外，其余服务端参数（`-connthread`、`-speedlimit`、`-nospeed` 等）在反连模式下同样生效。
-- 反连固定维持 **4 条**活跃出站连接（连接池），每条连接都是独立完整的测试会话；断开后按 1s~60s 指数退避自动重连。
-- 出站连接带 ping/pong 心跳（默认 30s，可被客户端在 ack 中覆盖），防止 NAT 空闲断链；`wss` 使用系统根证书校验。
+- 出站连接带 ping/pong 心跳（默认 30s，可被客户端在 ack 中覆盖）；`wss` 使用系统根证书校验。
 
 **客户端握手协议**（`msr-v1`）：
 
@@ -106,17 +115,18 @@ curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed
 
 2. 客户端用同一 `token` 校验 `Sign`，然后发送 `ReverseAck`：
 
-| 字段 | 说明 |
-| --- | --- |
-| `Type` | `"ack"` 表示接受；其他值为拒绝，miaospeed 会断开并退避重试 |
-| `Protocol` | 原样返回 `msr-v1`，版本协商锚点 |
-| `Sign` | `hashMiaoSpeed(token, hello.Sign)`，证明面板持有同一 token（双向认证） |
-| `Version` / `Name` | 面板版本与名称，仅用于日志 |
-| `Timestamp` | 面板时间戳，用于时钟偏差排查 |
-| `SessionID` | 面板为该连接分配的会话 ID，用于日志关联 |
-| `Heartbeat` | 心跳间隔（秒），`0` 表示使用后端默认 30s |
-| `MaxTasks` | 建议的单连接最大并发任务数，`0` 表示不限制（后端仅记录） |
-| `Error` | 拒绝原因，`Type != "ack"` 时使用 |
+| 字段 | 说明                                                      |
+| --- |---------------------------------------------------------|
+| `Type` | `"ack"` 表示接受；其他值为拒绝，miaospeed 会断开并退避重试                  |
+| `Protocol` | 原样返回 `msr-v1`，版本协商锚点                                    |
+| `Sign` | `hashMiaoSpeed(token, hello.Sign)`，证明客户端持有同一token（双向认证） |
+| `Version` / `Name` | 面板版本与名称，仅用于日志                                           |
+| `Timestamp` | 面板时间戳，用于时钟偏差排查                                          |
+| `SessionID` | 面板为该连接分配的会话 ID，用于日志关联                                   |
+| `Heartbeat` | 心跳间隔（秒），`0` 表示使用后端默认 30s                                |
+| `MaxTasks` | 建议的单连接最大并发任务数，`0` 表示不限制（后端仅记录）                          |
+| `Pool` | 该端点应维持的连接数，`0` 表示使用后端默认值 `1`；后端只扩容不缩容，上限 16             |
+| `Error` | 拒绝原因，`Type != "ack"` 时使用                                |
 
 
 

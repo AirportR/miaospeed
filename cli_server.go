@@ -15,6 +15,16 @@ import (
 	"github.com/airportr/miaospeed/utils"
 )
 
+// connectList collects every -connect value.
+type connectList []string
+
+func (c *connectList) String() string { return strings.Join(*c, ",") }
+
+func (c *connectList) Set(value string) error {
+	*c = append(*c, utils.SplitConnectValues(value)...)
+	return nil
+}
+
 func InitConfigServer() *utils.GlobalConfig {
 	gcfg := &utils.GCFG
 	sflag := flag.NewFlagSet(cmdName+" server", flag.ExitOnError)
@@ -37,20 +47,34 @@ func InitConfigServer() *utils.GlobalConfig {
 	privKeyStr := sflag.String("serverprivatekey", "", "specific the sever private key (PEM format)")
 	clientCAStr := sflag.String("clientca", "", "path to client CA certificate (PEM) - enables optional mTLS: verify client cert if presented, allow without")
 	demoMode := sflag.Bool("demo", false, "run server in demo mode with default configs")
-	connectURL := sflag.String("connect", "", "reverse connection: dial OUT to a websocket endpoint hosted by the client, e.g. wss://panel.example.com/reverse. Useful when this host has no public ip")
+	var connectURLs connectList
+	sflag.Var(&connectURLs, "connect", "reverse connection: dial OUT to a websocket endpoint hosted by the client, e.g. wss://panel.example.com/reverse. Repeat the flag (or separate the urls with a comma) to serve several endpoints. Useful when this host has no public ip")
 
 	parseFlag(sflag)
 
-	gcfg.ConnectURL = strings.TrimSpace(*connectURL)
-	if gcfg.ConnectURL != "" {
-		// The reverse connector authenticates with the same token the
-		// panel uses for signing requests.
+	validEndpoints, rejectedEndpoints, duplicatedEndpoints := utils.ParseConnectEndpoints(connectURLs)
+	for _, problem := range rejectedEndpoints {
+		utils.DErrorf("MiaoSpeed Server | Invalid -connect endpoint, %s", problem)
+	}
+	if len(rejectedEndpoints) > 0 {
+		os.Exit(1)
+	}
+	for _, duplicated := range duplicatedEndpoints {
+		utils.DWarnf("MiaoSpeed Server | Duplicated -connect endpoint dropped, url=%s", duplicated)
+	}
+
+	gcfg.ConnectURLs = validEndpoints
+	if len(validEndpoints) > 0 {
+		gcfg.ConnectURL = validEndpoints[0]
 		if gcfg.Token == "" {
 			utils.DErrorf("MiaoSpeed Server | -connect requires -token to authenticate with the client")
 			os.Exit(1)
 		}
 		if gcfg.Binder == "" {
 			utils.DWarnf("MiaoSpeed Server | -connect is set without -bind, running in reverse-only mode (no inbound listener)")
+		}
+		if len(validEndpoints) > 1 {
+			utils.DWarnf("MiaoSpeed Server | Serving %d reverse endpoints", len(validEndpoints))
 		}
 	}
 
@@ -100,7 +124,7 @@ func InitConfigServer() *utils.GlobalConfig {
 
 	// Nothing to serve: without -bind the server does not listen and without
 	// -connect it does not dial out. Fail loudly instead of idling forever.
-	if gcfg.ConnectURL == "" && gcfg.Binder == "" {
+	if len(gcfg.ConnectEndpoints()) == 0 && gcfg.Binder == "" {
 		utils.DErrorf("MiaoSpeed Server | both -bind and -connect are empty, nothing to serve")
 		os.Exit(1)
 	}
@@ -152,7 +176,7 @@ func RunCliServer() {
 
 	// reverse connection: dial out to the client. Can run alone or
 	// alongside the inbound listener (both share the task polls).
-	if utils.GCFG.ConnectURL != "" {
+	if len(utils.GCFG.ConnectEndpoints()) > 0 {
 		go service.RunReverseConnector()
 	}
 

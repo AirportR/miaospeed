@@ -12,13 +12,24 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// The reverse connector keeps a fixed-size pool of outbound websocket
-// connections to the client/panel (see `-connect`). Each connection is an
-// independent miaospeed session identical to the inbound listener; lost
-// connections are re-dialed with exponential backoff.
+// The reverse connector keeps a pool of outbound websocket connections to the
+// client/panel (see `-connect`). Each connection is an independent miaospeed
+// session identical to the inbound listener; lost connections are re-dialed
+// with exponential backoff.
+//
+// Several endpoints may be served at once. Every endpoint owns a supervisor
+// goroutine and its own pool, so an endpoint that is unreachable only costs its
+// own connections. The pool size of an endpoint is negotiated by the client:
+// the first (probe) connection is always dialed, and the Pool field of its
+// ReverseAck decides how many more connections that endpoint should keep.
 
 const (
-	reversePoolSize      = 4
+	// reverseDefaultPoolSize is the pool used until the client negotiates a
+	// bigger one, and also what a client asking for less ends up with.
+	reverseDefaultPoolSize = 1
+	// reversePoolHardMax caps what a client may negotiate through ReverseAck.
+	reversePoolHardMax = 16
+
 	reverseHeartbeatSecs = 30
 	reverseDialTimeout   = 15 * time.Second
 	reverseBackoffBase   = 1 * time.Second
@@ -45,44 +56,107 @@ func reverseHandshakeSign(token, nonce string, timestamp int64) string {
 	return utils.SignChallenge(token, fmt.Sprintf("reverse-hello|%s|%d", nonce, timestamp))
 }
 
-// RunReverseConnector maintains the outbound connection pool; call it in a
-// goroutine. It exits early if the connect URL is empty or invalid.
+// RunReverseConnector starts one supervisor per configured endpoint; call it in
+// a goroutine. It returns immediately when no endpoint is configured.
 func RunReverseConnector() {
-	rawURL := utils.GCFG.ConnectURL
-	if rawURL == "" {
+	RunReverseConnectorWith(utils.GCFG.ConnectEndpoints())
+}
+
+// RunReverseConnectorWith is the testable core of RunReverseConnector: it
+// validates the endpoints and starts a supervisor for every usable one.
+func RunReverseConnectorWith(endpoints []string) {
+	valid, rejected, duplicated := utils.ParseConnectEndpoints(endpoints)
+	for _, problem := range rejected {
+		utils.DErrorf("MiaoSpeed Reverse | Skipping invalid endpoint, %s", problem)
+	}
+	// Duplicates are already reported by the CLI startup validation; keep this
+	// defensive path quiet unless verbose logging is on.
+	for _, duplicate := range duplicated {
+		utils.DLogf("MiaoSpeed Reverse | Skipping duplicated endpoint, url=%s", duplicate)
+	}
+	if len(valid) == 0 {
+		utils.DErrorf("MiaoSpeed Reverse | No usable endpoint to serve, reverse connector not started")
 		return
 	}
 
-	target, err := url.Parse(rawURL)
-	if err != nil {
-		utils.DErrorf("MiaoSpeed Reverse | Invalid connect url, url=%s error=%s", rawURL, err.Error())
-		return
-	}
-	switch target.Scheme {
-	case "ws", "wss":
-	default:
-		utils.DErrorf("MiaoSpeed Reverse | Connect url scheme must be ws or wss, url=%s", rawURL)
-		return
-	}
-	if target.Host == "" {
-		utils.DErrorf("MiaoSpeed Reverse | Connect url is missing a host, url=%s", rawURL)
-		return
-	}
-
-	utils.DWarnf("MiaoSpeed Reverse | Starting reverse connector, url=%s pool=%d", rawURL, reversePoolSize)
-	for i := 0; i < reversePoolSize; i++ {
-		go runReverseWorker(i, rawURL)
+	utils.DWarnf("MiaoSpeed Reverse | Starting reverse connector, endpoints=%d pool=negotiated(default %d per endpoint)",
+		len(valid), reverseDefaultPoolSize)
+	for i, rawURL := range valid {
+		label := reverseEndpointLabel(i, rawURL)
+		utils.DWarnf("MiaoSpeed Reverse | [%s] endpoint registered, url=%s", label, rawURL)
+		go runEndpointSupervisor(label, rawURL)
 	}
 }
 
-// runReverseWorker owns one pool slot: dial, handshake, serve, then retry
-// with exponential backoff. A graceful client close frees the slot on
-// purpose, so reconnect immediately without backoff.
-func runReverseWorker(slot int, rawURL string) {
+// reverseEndpointLabel builds a short, stable log tag for an endpoint, e.g.
+// "ep0(panel.example.com)". Full urls are too noisy to repeat on every line.
+func reverseEndpointLabel(idx int, rawURL string) string {
+	if target, err := url.Parse(rawURL); err == nil && target.Host != "" {
+		return fmt.Sprintf("ep%d(%s)", idx, target.Host)
+	}
+	return fmt.Sprintf("ep%d", idx)
+}
+
+// runEndpointSupervisor owns one endpoint. It starts with a single probe
+// connection and grows the pool when the client negotiates a bigger one through
+// the ReverseAck. Growth is one-way on purpose: a later, smaller value is
+// ignored so that healthy sessions are never torn down, which is also why
+// workers never need a cancellation channel.
+func runEndpointSupervisor(label string, rawURL string) {
+	desired := reverseDefaultPoolSize
+	negotiated := make(chan int, 8)
+
+	for slot := 0; slot < desired; slot++ {
+		go runReverseWorker(label, slot, rawURL, negotiated)
+	}
+
+	for want := range negotiated {
+		want = clampReversePoolSize(want)
+		if want <= desired {
+			continue
+		}
+		for slot := desired; slot < want; slot++ {
+			go runReverseWorker(label, slot, rawURL, negotiated)
+		}
+		utils.DWarnf("MiaoSpeed Reverse | [%s] pool scaled up to %d by client ack", label, want)
+		desired = want
+	}
+}
+
+// clampReversePoolSize keeps a client negotiated pool inside sane bounds so a
+// broken or hostile ack cannot spawn an unbounded number of connections.
+func clampReversePoolSize(size int) int {
+	switch {
+	case size < 1:
+		return reverseDefaultPoolSize
+	case size > reversePoolHardMax:
+		return reversePoolHardMax
+	default:
+		return size
+	}
+}
+
+// runReverseWorker owns one pool slot of one endpoint: dial, handshake, serve,
+// then retry with exponential backoff. A graceful client close frees the slot on
+// purpose, so reconnect immediately without backoff. The negotiated pool is
+// reported to the supervisor as soon as the handshake completes, which owns the
+// pool size decision.
+func runReverseWorker(label string, slot int, rawURL string, negotiated chan<- int) {
+	onAck := func(ack *interfaces.ReverseAck) {
+		if ack.Pool <= 0 {
+			return
+		}
+		// Never block the session on the supervisor.
+		select {
+		case negotiated <- ack.Pool:
+		default:
+		}
+	}
+
 	backoff := reverseBackoffBase
 	for {
 		started := time.Now()
-		err := runReverseSession(slot, rawURL)
+		err := runReverseSession(label, slot, rawURL, onAck)
 		if errors.Is(err, errClientClosed) {
 			backoff = reverseBackoffBase
 			continue
@@ -90,7 +164,7 @@ func runReverseWorker(slot int, rawURL string) {
 		if time.Since(started) >= reverseStableLink {
 			backoff = reverseBackoffBase
 		}
-		utils.DErrorf("MiaoSpeed Reverse | Slot %d connection lost, error=%s retry_in=%s", slot, err.Error(), backoff)
+		utils.DErrorf("MiaoSpeed Reverse | [%s] Slot %d connection lost, error=%s retry_in=%s", label, slot, err.Error(), backoff)
 		time.Sleep(backoff)
 		backoff *= 2
 		if backoff > reverseBackoffMax {
@@ -114,8 +188,11 @@ func isClientCloseError(err error) bool {
 }
 
 // runReverseSession dials the client, performs the msr-v1 handshake and
-// then serves the standard miaospeed protocol until the connection dies.
-func runReverseSession(slot int, rawURL string) error {
+// then serves the standard miaospeed protocol until the connection dies. onAck
+// is called right after the handshake completes, because the session itself may
+// stay alive for hours and the caller must not wait for it to end before acting
+// on the negotiated values.
+func runReverseSession(label string, slot int, rawURL string, onAck func(*interfaces.ReverseAck)) error {
 	conn, resp, err := reverseDialer.Dial(rawURL, http.Header{})
 	if err != nil {
 		if resp != nil {
@@ -125,12 +202,15 @@ func runReverseSession(slot int, rawURL string) error {
 		return fmt.Errorf("dial failed: %w", err)
 	}
 	remote := conn.RemoteAddr().String()
-	utils.DLogf("MiaoSpeed Reverse | Slot %d connected, remote=%s", slot, remote)
+	utils.DLogf("MiaoSpeed Reverse | [%s] Slot %d connected, remote=%s", label, slot, remote)
 
 	ack, err := reverseHandshake(conn)
 	if err != nil {
 		_ = conn.Close()
 		return err
+	}
+	if onAck != nil {
+		onAck(ack)
 	}
 
 	heartbeat := int64(reverseHeartbeatSecs)
@@ -146,8 +226,8 @@ func runReverseSession(slot int, rawURL string) error {
 	interval := time.Duration(heartbeat) * time.Second
 	readWindow := 2 * interval
 
-	utils.DWarnf("MiaoSpeed Reverse | Slot %d link established, remote=%s client=%s/%s session=%s heartbeat=%ds maxTasks=%d",
-		slot, remote, ack.Name, ack.Version, ack.SessionID, heartbeat, ack.MaxTasks)
+	utils.DWarnf("MiaoSpeed Reverse | [%s] Slot %d link established, remote=%s client=%s/%s session=%s heartbeat=%ds maxTasks=%d pool=%d",
+		label, slot, remote, ack.Name, ack.Version, ack.SessionID, heartbeat, ack.MaxTasks, ack.Pool)
 
 	// The read deadline is renewed by pongs, so a dead link surfaces within
 	// two heartbeat intervals even when TCP does not notice.
@@ -162,7 +242,7 @@ func runReverseSession(slot int, rawURL string) error {
 
 	sessionErr := handleWsSession(conn, remote)
 	if isClientCloseError(sessionErr) {
-		utils.DLogf("MiaoSpeed Reverse | Slot %d closed by client, redialing immediately", slot)
+		utils.DLogf("MiaoSpeed Reverse | [%s] Slot %d closed by client, redialing immediately", label, slot)
 		return errClientClosed
 	}
 	if sessionErr != nil {
