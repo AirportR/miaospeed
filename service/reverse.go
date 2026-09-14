@@ -30,7 +30,9 @@ import (
 //   - a client that advertises ReverseAck.Control also gets one dedicated control
 //     connection per endpoint, over which ReverseScale frames resize the pool at
 //     any time. Once that link is online the ack Pool stops driving the pool, so
-//     a reconnecting session cannot undo a shrink the client asked for;
+//     a reconnecting session cannot undo a shrink the client asked for. A size the
+//     client asks for is applied at once: reverseIdleTimeout gates only the
+//     backend's own shrinking, never a shrink that was requested;
 //   - while no control link is online the backend shrinks the pool on its own
 //     once its connections have been idle for reverseIdleTimeout, down to a floor
 //     of one connection.
@@ -653,7 +655,7 @@ func watchIdle(slot *reverseSessionSlot, conn *websocket.Conn, activity *session
 		case <-ticker.C:
 		}
 
-		if activity.idleFor() < reverseIdleTimeout() {
+		if !requested && activity.idleFor() < reverseIdleTimeout() {
 			continue
 		}
 		autonomous := false
@@ -665,7 +667,7 @@ func watchIdle(slot *reverseSessionSlot, conn *websocket.Conn, activity *session
 		}
 
 		utils.DWarnf("MiaoSpeed Reverse | [%s] %s idle for %s, retiring (autonomous=%v)",
-			slot.label, slot.name(), reverseIdleTimeout(), autonomous)
+			slot.label, slot.name(), activity.idleFor().Round(time.Second), autonomous)
 		select {
 		case reason <- autonomous:
 		default:
