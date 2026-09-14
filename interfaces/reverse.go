@@ -12,9 +12,6 @@ package interfaces
 // connection speaks the exact same SlaveRequest/SlaveResponse protocol as the
 // inbound server mode, with roles unchanged (the client still sends requests,
 // miaospeed still computes and streams results).
-//
-// Message field names follow the existing miaospeed convention (PascalCase,
-// no JSON tags).
 
 const ReverseProtocolV1 = "msr-v1"
 
@@ -22,6 +19,14 @@ const (
 	ReverseMsgHello = "hello"
 	ReverseMsgAck   = "ack"
 	ReverseMsgError = "error"
+	ReverseMsgScale = "scale"
+)
+
+// Reverse connection roles, carried by ReverseHello.Role.
+// an empty role therefore means "session".
+const (
+	ReverseRoleSession = "session"
+	ReverseRoleControl = "control"
 )
 
 // ReverseHello is the first message sent by miaospeed over a freshly
@@ -33,6 +38,7 @@ type ReverseHello struct {
 	Nonce     string // random string for the handshake signature
 	Timestamp int64  // unix seconds
 	Sign      string // hashMiaoSpeed(token, "reverse-hello|"+nonce+"|"+timestamp)
+	Role      string `json:"Role,omitempty"` // "control" = control link; never part of Sign
 }
 
 // ReverseAck is the client's reply to a ReverseHello. Type "ack" completes
@@ -48,6 +54,23 @@ type ReverseAck struct {
 	SessionID string // session id assigned by the client to this pooled connection, for log correlation
 	Heartbeat int64  // requested ping/pong interval in seconds, 0 = backend default (30s)
 	MaxTasks  int    // suggested max concurrent tasks per connection, 0 = unlimited; logged only
-	Pool      int    // connections the backend should keep for this endpoint, 0 = backend default (1)
+	Pool      int    // initial connections for this endpoint, 0 = backend default (1); superseded by ReverseScale once a control link is online
+	Control   bool   // client understands Role "control" and serves control links; false for clients that predate the feature
 	Error     string // rejection reason when Type != "ack"
+}
+
+// ReverseScale is sent by the client over a control connection to ask for a new
+// pool size for that endpoint.
+type ReverseScale struct {
+	Type string // "scale"
+	Pool int    // desired connections for this endpoint
+	Seq  int64  // client sequence number, echoed back for correlation
+}
+
+// ReverseScaleAck reports the outcome of one ReverseScale.
+type ReverseScaleAck struct {
+	Type  string // "scale"
+	Seq   int64  // echo of ReverseScale.Seq
+	Pool  int    // value actually applied after clamping
+	Error string // non-empty when the request was rejected
 }
