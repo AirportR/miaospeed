@@ -18,7 +18,7 @@
 
 ## 简介
 
-⚠️ 本分支为 fork，原仓库作者已不再维护。
+miaospeed的维护分支，原仓库作者已不再维护。
 
 miaospeed 是一个使用 Go 编写的代理服务器性能测试解决方案。
 
@@ -65,9 +65,10 @@ curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed
 由于 miaospeed 最初与闭源项目 miaoko 搭配使用，因此部分证书与脚本未开源。您需要补齐以下文件以成功编译:
 
 1. `./utils/embeded/BUILDTOKEN.key`: 这是 `编译TOKEN`，用于给 miaospeed 的 单次测试请求 结构体签名，避免客户端以非标准方式使用 miaospeed 导致数据真实性争议。您可以随便定义它，例如: `1111|2222|33333333`，不同段用 `|` 切开。
-2. `./preconfigs/embeded/miaokoCA/miaoko.crt`: 当 `-mtls` 启用时，miaospeed 会读取这里的证书让客户端做 TLS 验证。
-3. `./preconfigs/embeded/miaokoCA/miaoko.key`: 同上，这是私钥。(对于这两个您可以自己用 openssl 签一个证书，但它不能用于 miaoko。)
-4. `./preconfigs/embeded/ca-certificates.crt`: miaospeed 自带的根证书集，防止有恶意用户修改系统更证书以作假 TLS RTT。（对于 debian 用户，您可以在安装 `ca-certificates` 包后，在 `/etc/ssl/certs/ca-certificates.crt` 获取这个文件）
+2. `./preconfigs/embeded/tls/`: 内嵌的 TLS 证书目录，整个目录会被编译进二进制。**编译时这里至少要有一对 `.crt` / `.key`，否则编译直接失败**。文件名随意，同名的 `.crt` 与 `.key` 配对即可：
+   - `miaoko.crt` / `miaoko.key`: 旧版内嵌证书。当 `-mtls` 启用时，miaospeed 会用它让客户端做 TLS 验证。(已过时的名称，仅作兼容适配，请使用下面的代替)
+   - `miaospeed_tls.crt` / `miaospeed_tls.key`: 新版内嵌证书的约定名称（`适用于koipy`）。
+3. `./preconfigs/embeded/ca-certificates.crt`: miaospeed 自带的根证书集，防止有恶意用户修改系统更证书以作假 TLS RTT。（对于 debian 用户，您可以在安装 `ca-certificates` 包后，在 `/etc/ssl/certs/ca-certificates.crt` 获取这个文件）
 
 以下为可选文件：
 

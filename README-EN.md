@@ -18,7 +18,7 @@
 
 ## Introduction
 
-⚠️ This branch is a fork, as the original repository is no longer maintained by its developer.
+The maintained branch of miaospeed; the original repository is no longer maintained by its developer.
 
 miaospeed is a performance testing tool for proxy servers, written in Go.
 
@@ -64,9 +64,10 @@ curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed
 Since miaospeed was originally used in conjunction with the closed-source project **miaoko**, some certificates and scripts are not open source. You need to complete the following files to successfully compile:
 
 1. `./utils/embeded/BUILDTOKEN.key`: This is the `build TOKEN`, which is used to sign the miaospeed **single test request** structure to prevent your client from using miaospeed in a non-standard way causing data authenticity disputes. You can define it freely, for example: `1111|2222|33333333`, different segments separated by `|`.
-2. `./preconfigs/embeded/miaokoCA/miaoko.crt`: When `-mtls` is enabled, miaospeed will read the certificate here to let the client do TLS verification.
-3. `./preconfigs/embeded/miaokoCA/miaoko.key`: Same as above, this is the private key. (For these two, you can sign a certificate with openssl yourself, but it cannot be used for miaoko.)
-4. `./preconfigs/embeded/ca-certificates.crt`: The built-in root certificate set of miaospeed, preventing malicious users from modifying system certificates to fake TLS RTT. (For debian users, you can get this file at `/etc/ssl/certs/ca-certificates.crt` after installing the `ca-certificates` package)
+2. `./preconfigs/embeded/tls/`: the directory holding the embedded TLS certificates, compiled into the binary as a whole. **It has to hold at least one `.crt` / `.key` pair at compile time, otherwise the build fails.** File names are free, a `.crt` and the `.key` of the same name are a pair:
+   - `miaoko.crt` / `miaoko.key`: the legacy embedded certificate. When `-mtls` is enabled, miaospeed serves it so the client can do TLS verification. (A deprecated name, kept for compatibility only; use the one below instead.)
+   - `miaospeed_tls.crt` / `miaospeed_tls.key`: the agreed name of the new embedded certificate (`for koipy`).
+3. `./preconfigs/embeded/ca-certificates.crt`: The built-in root certificate set of miaospeed, preventing malicious users from modifying system certificates to fake TLS RTT. (For debian users, you can get this file at `/etc/ssl/certs/ca-certificates.crt` after installing the `ca-certificates` package)
 
 The following are **optional** operations:
 
@@ -79,6 +80,8 @@ After you have created the above files, you can run `go build .` to build `miaos
 ### TLS and Client Certificates
 
 `-mtls` enables the server TLS certificate so clients can verify the server identity. To verify client certificates when clients present them, also pass `-clientca <path>` with the trusted client CA certificate. This mode is optional client certificate verification: a presented client certificate must chain to that CA, while clients without a certificate continue to connect through the existing logic.
+
+To serve one more certificate on top of the embedded ones, pass `-serverpublickey <crt>` together with `-serverprivatekey <key>`. The extra pair is added to the certificate list, never swapped in for the embedded ones, and it takes index 0 - so a client that sends no SNI, i.e. dialing a bare IP, is the one that gets it.
 
 ### Reverse Connection
 
