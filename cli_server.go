@@ -43,8 +43,8 @@ func InitConfigServer() *utils.GlobalConfig {
 	path := sflag.String("path", "", "specific websocket path you want, default '/'")
 	allowIP := sflag.String("allowip", "0.0.0.0/0,::/0", "allow ip range, can be format like 192.168.1.0/24,10.12.13.2")
 	whiteList := sflag.String("whitelist", "", "bot id whitelist, can be format like 1111,2222,3333")
-	pubKeyStr := sflag.String("serverpublickey", "", "specific the sever public key (PEM format)")
-	privKeyStr := sflag.String("serverprivatekey", "", "specific the sever private key (PEM format)")
+	pubKeyStr := sflag.String("serverpublickey", "", "extra server certificate (PEM format), served in addition to the embedded ones and first in the list")
+	privKeyStr := sflag.String("serverprivatekey", "", "private key (PEM format) for -serverpublickey")
 	clientCAStr := sflag.String("clientca", "", "path to client CA certificate (PEM) - enables optional mTLS: verify client cert if presented, allow without")
 	demoMode := sflag.Bool("demo", false, "run server in demo mode with default configs")
 	var connectURLs connectList
@@ -134,13 +134,23 @@ func InitConfigServer() *utils.GlobalConfig {
 	} else {
 		utils.DWarnf("MiaoSpeed Server | Using a custom websocket path: %s", gcfg.Path)
 	}
-	if pubKey := utils.ReadFile(*pubKeyStr); pubKey != "" {
-		utils.DLog("Override predefined tls certificates")
-		preconfigs.MIAOKO_TLS_CRT = pubKey
-	}
-	if priKey := utils.ReadFile(*privKeyStr); priKey != "" {
-		utils.DLog("Override predefined tls key")
-		preconfigs.MIAOKO_TLS_KEY = priKey
+	if *pubKeyStr != "" || *privKeyStr != "" {
+		// The pair is served in addition to the embedded certificates
+		if *pubKeyStr == "" || *privKeyStr == "" {
+			utils.DErrorf("MiaoSpeed Server | -serverpublickey and -serverprivatekey must be given together")
+			os.Exit(1)
+		}
+		pubKey := utils.ReadFile(*pubKeyStr)
+		priKey := utils.ReadFile(*privKeyStr)
+		if pubKey == "" || priKey == "" {
+			utils.DErrorf("MiaoSpeed Server | cannot read the certificate pair %s / %s", *pubKeyStr, *privKeyStr)
+			os.Exit(1)
+		}
+		if err := preconfigs.AppendServerCertificate(pubKey, priKey); err != nil {
+			utils.DErrorf("MiaoSpeed Server | cannot append the TLS certificate %s, error=%s", *pubKeyStr, err.Error())
+			os.Exit(1)
+		}
+		utils.DWarnf("MiaoSpeed Server | extra TLS certificate registered, served first | %s", *pubKeyStr)
 	}
 	if *clientCAStr != "" {
 		if !gcfg.MiaoKoSignedTLS {

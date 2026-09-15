@@ -3,11 +3,12 @@ package preconfigs
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"path"
+	"sort"
+	"strings"
 )
 
 // clientCAPool stores optional trusted client CAs for mTLS.
-// When set, clients that present a certificate must chain to one of these CAs;
-// clients that present no certificate are still allowed through.
 var clientCAPool *x509.CertPool
 
 // SetClientCAPool sets the pool of trusted client CAs for optional mTLS verification.
@@ -26,12 +27,89 @@ func LoadClientCAFromPEM(pemData string) bool {
 	return false
 }
 
+const embeddedTLSDir = "embeded/tls"
+
+// tlsCertPriority fixes the serving order of the embedded certificates, given by
+// file name without extension.
+var tlsCertPriority = []string{"miaospeed_tls", "miaoko"}
+
+func sortTLSCertNames(names []string) []string {
+	rank := func(name string) int {
+		for i, preferred := range tlsCertPriority {
+			if name == preferred {
+				return i
+			}
+		}
+		return len(tlsCertPriority)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if rank(names[i]) != rank(names[j]) {
+			return rank(names[i]) < rank(names[j])
+		}
+		return names[i] < names[j]
+	})
+	return names
+}
+
+// loadEmbeddedTLSCerts reads every complete .crt/.key pair out of the embedded
+// TLS directory, in serving order.
+func loadEmbeddedTLSCerts() []tls.Certificate {
+	entries, err := tlsEmbedFS.ReadDir(embeddedTLSDir)
+	if err != nil {
+		panic("preconfigs: cannot read the embedded TLS directory " + embeddedTLSDir + ": " + err.Error())
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".crt") {
+			names = append(names, strings.TrimSuffix(entry.Name(), ".crt"))
+		}
+	}
+
+	certs := make([]tls.Certificate, 0, len(names))
+	for _, name := range sortTLSCertNames(names) {
+		crtPEM, err := tlsEmbedFS.ReadFile(path.Join(embeddedTLSDir, name+".crt"))
+		if err != nil {
+			panic("preconfigs: cannot read the embedded certificate " + name + ".crt: " + err.Error())
+		}
+		keyPEM, err := tlsEmbedFS.ReadFile(path.Join(embeddedTLSDir, name+".key"))
+		if err != nil {
+			panic("preconfigs: the embedded certificate " + name + ".crt has no " + name + ".key next to it")
+		}
+		cert, err := tls.X509KeyPair(crtPEM, keyPEM)
+		if err != nil {
+			panic("preconfigs: cannot load the embedded certificate " + name + ": " + err.Error())
+		}
+		certs = append(certs, cert)
+	}
+
+	if len(certs) == 0 {
+		panic("preconfigs: " + embeddedTLSDir + " holds no usable TLS certificate pair")
+	}
+	return certs
+}
+
+var extraServerCerts []tls.Certificate
+
+func AppendServerCertificate(crtPEM, keyPEM string) error {
+	cert, err := tls.X509KeyPair([]byte(crtPEM), []byte(keyPEM))
+	if err != nil {
+		return err
+	}
+	extraServerCerts = append(extraServerCerts, cert)
+	return nil
+}
+
 func MakeSelfSignedTLSServer() *tls.Config {
-	cert, _ := tls.X509KeyPair([]byte(MIAOKO_TLS_CRT), []byte(MIAOKO_TLS_KEY))
+	embeddedCerts := loadEmbeddedTLSCerts()
+
+	certs := make([]tls.Certificate, 0, len(extraServerCerts)+len(embeddedCerts))
+	certs = append(certs, extraServerCerts...)
+	certs = append(certs, embeddedCerts...)
 
 	// Construct a tls.config
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
+		Certificates: certs,
 	}
 
 	// If a client CA pool is configured, enable best-effort mTLS:
