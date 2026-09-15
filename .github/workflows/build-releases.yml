@@ -99,7 +99,26 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: cache gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/.gradle/caches
+            android/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+          accept-android-sdk-licenses: 'true'
+
+      - name: accept sdk licenses
+        run: yes | sdkmanager --licenses > /dev/null
+
+      - name: install android sdk packages
+        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" > /dev/null
 
       - name: fix embeded
         env:
