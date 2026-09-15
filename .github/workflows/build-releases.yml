@@ -41,12 +41,30 @@ jobs:
           cache: true
 
       - name: fix embeded
+        env:
+          MIAOSPEED_CRT: ${{ secrets.MIAOSPEED_CRT }}
+          MIAOSPEED_KEY: ${{ secrets.MIAOSPEED_KEY }}
+          KOIPY_TLS_CRT: ${{ secrets.KOIPY_TLS_CRT }}
+          KOIPY_TLS_KEY: ${{ secrets.KOIPY_TLS_KEY }}
+          MS_BUILDTOKEN: ${{ secrets.MS_BUILDTOKEN }}
         run: |
           go env
-          mkdir ./preconfigs/embeded/miaokoCA
-          echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
-          echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
-          echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
+          mkdir -p ./preconfigs/embeded/tls
+          # old
+          if [ -n "$MIAOSPEED_CRT" ] && [ -n "$MIAOSPEED_KEY" ]; then
+            printf '%s\n' "$MIAOSPEED_CRT" > ./preconfigs/embeded/tls/miaoko.crt
+            printf '%s\n' "$MIAOSPEED_KEY" > ./preconfigs/embeded/tls/miaoko.key
+          fi
+          # new
+          if [ -n "$KOIPY_TLS_CRT" ] && [ -n "$KOIPY_TLS_KEY" ]; then
+            printf '%s\n' "$KOIPY_TLS_CRT" > ./preconfigs/embeded/tls/miaospeed_tls.crt
+            printf '%s\n' "$KOIPY_TLS_KEY" > ./preconfigs/embeded/tls/miaospeed_tls.key
+          fi
+          if ! ls ./preconfigs/embeded/tls/*.crt >/dev/null 2>&1; then
+            echo "::error::preconfigs/embeded/tls 下没有任何 TLS 证书，请配置 MIAOSPEED_CRT/MIAOSPEED_KEY 或 KOIPY_TLS_CRT/KOIPY_TLS_KEY"
+            exit 1
+          fi
+          echo "$MS_BUILDTOKEN" > ./utils/embeded/BUILDTOKEN.key
           head -n 5 ./engine/embeded/default_geoip.js
 
       - name: build ${{ matrix.group }}
@@ -84,11 +102,30 @@ jobs:
       - uses: android-actions/setup-android@v3
 
       - name: fix embeded
+        env:
+          MIAOSPEED_CRT: ${{ secrets.MIAOSPEED_CRT }}
+          MIAOSPEED_KEY: ${{ secrets.MIAOSPEED_KEY }}
+          KOIPY_TLS_CRT: ${{ secrets.KOIPY_TLS_CRT }}
+          KOIPY_TLS_KEY: ${{ secrets.KOIPY_TLS_KEY }}
+          MS_BUILDTOKEN: ${{ secrets.MS_BUILDTOKEN }}
         run: |
-          mkdir ./preconfigs/embeded/miaokoCA
-          echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
-          echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
-          echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
+          mkdir -p ./preconfigs/embeded/tls
+
+          if [ -n "$MIAOSPEED_CRT" ] && [ -n "$MIAOSPEED_KEY" ]; then
+            printf '%s\n' "$MIAOSPEED_CRT" > ./preconfigs/embeded/tls/miaoko.crt
+            printf '%s\n' "$MIAOSPEED_KEY" > ./preconfigs/embeded/tls/miaoko.key
+          fi
+
+          if [ -n "$KOIPY_TLS_CRT" ] && [ -n "$KOIPY_TLS_KEY" ]; then
+            printf '%s\n' "$KOIPY_TLS_CRT" > ./preconfigs/embeded/tls/miaospeed_tls.crt
+            printf '%s\n' "$KOIPY_TLS_KEY" > ./preconfigs/embeded/tls/miaospeed_tls.key
+          fi
+
+          if ! ls ./preconfigs/embeded/tls/*.crt >/dev/null 2>&1; then
+            echo "::error::preconfigs/embeded/tls 下没有任何 TLS 证书，请配置 MIAOSPEED_CRT/MIAOSPEED_KEY 或 KOIPY_TLS_CRT/KOIPY_TLS_KEY"
+            exit 1
+          fi
+          echo "$MS_BUILDTOKEN" > ./utils/embeded/BUILDTOKEN.key
 
       - name: restore signing key
         env:
