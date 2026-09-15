@@ -15,6 +15,8 @@ data class ServerParams(
     var bind: String = "0.0.0.0:8765",
     var token: String = "",
     var path: String = "",
+    var connect: String = "",
+    var reverseOnly: Boolean = false,
     var allowip: String = "0.0.0.0/0,::/0",
     var whitelist: String = "",
     var interfaceName: String = "",
@@ -38,9 +40,13 @@ data class ServerParams(
 
 fun ServerParams.toArgs(): List<String> = buildList {
     add("server")
-    addOpt("bind", bind)
+    if (!reverseOnly) addOpt("bind", bind)
     addOpt("token", token)
     addOpt("path", path)
+    connectEndpoints(connect).forEach { url ->
+        add("-connect")
+        add(url)
+    }
     addOpt("allowip", allowip)
     addOpt("whitelist", whitelist)
     addOpt("interface", interfaceName)
@@ -64,6 +70,7 @@ fun ServerParams.toArgs(): List<String> = buildList {
 
 fun ServerParams.toJson(): JSONObject = JSONObject().apply {
     put("bind", bind); put("token", token); put("path", path); put("allowip", allowip)
+    put("connect", connect); put("reverseOnly", reverseOnly)
     put("whitelist", whitelist); put("interfaceName", interfaceName)
     put("mtls", mtls); put("nospeed", nospeed); put("upload", upload); put("ipv6", ipv6)
     put("demo", demo); put("verbose", verbose)
@@ -77,6 +84,8 @@ fun serverParamsFromJson(j: JSONObject?): ServerParams = ServerParams(
     bind = j?.optString("bind")?.takeIf { it.isNotBlank() } ?: "0.0.0.0:8765",
     token = j?.optString("token") ?: "",
     path = j?.optString("path") ?: "",
+    connect = j?.optString("connect") ?: "",
+    reverseOnly = j?.optBoolean("reverseOnly", false) ?: false,
     allowip = j?.optString("allowip")?.takeIf { it.isNotBlank() } ?: "0.0.0.0/0,::/0",
     whitelist = j?.optString("whitelist") ?: "",
     interfaceName = j?.optString("interfaceName") ?: "",
@@ -162,6 +171,54 @@ private fun MutableList<String>.addOpt(name: String, value: String) {
 
 private fun MutableList<String>.addFlag(name: String, value: Boolean) {
     if (value) add("-$name")
+}
+
+fun connectEndpoints(text: String): List<String> =
+    text.split(',', '\n', '\r', ' ', '\t')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+
+fun List<String>.lastFlagValue(name: String): String? {
+    var found: String? = null
+    var i = 0
+    while (i < size) {
+        val a = this[i]
+        when {
+            a == "-$name" || a == "--$name" -> {
+                found = getOrNull(i + 1)
+                i += 2
+            }
+            a.startsWith("-$name=") -> {
+                found = a.substring(name.length + 2)
+                i += 1
+            }
+            a.startsWith("--$name=") -> {
+                found = a.substring(name.length + 3)
+                i += 1
+            }
+            else -> i += 1
+        }
+    }
+    return found
+}
+
+fun List<String>.hasFlagValue(name: String): Boolean {
+    var i = 0
+    while (i < size) {
+        val a = this[i]
+        when {
+            a == "-$name" || a == "--$name" -> {
+                if (!getOrNull(i + 1).isNullOrBlank()) return true
+                i += 2
+            }
+            a.startsWith("-$name=") || a.startsWith("--$name=") -> {
+                if (a.substringAfter('=').isNotBlank()) return true
+                i += 1
+            }
+            else -> i += 1
+        }
+    }
+    return false
 }
 
 /** 简易 shell 切词：支持单/双引号包裹含空白的参数 */

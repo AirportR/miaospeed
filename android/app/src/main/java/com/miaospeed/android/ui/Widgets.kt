@@ -2,6 +2,7 @@ package com.miaospeed.android.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -11,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -28,15 +31,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.miaospeed.android.ImportUtils
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun SectionCard(
@@ -59,6 +66,7 @@ fun SectionCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LabeledTextField(
     label: String,
@@ -70,8 +78,12 @@ fun LabeledTextField(
     singleLine: Boolean = true,
     minLines: Int = 1,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    enabled: Boolean = true,
     trailing: (@Composable () -> Unit)? = null,
 ) {
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
             label,
@@ -89,12 +101,23 @@ fun LabeledTextField(
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .bringIntoViewRequester(bringIntoViewRequester)
+                .onFocusChanged { state ->
+                    if (state.isFocused) {
+                        scope.launch {
+                            delay(150)
+                            bringIntoViewRequester.bringIntoView()
+                        }
+                    }
+                },
             placeholder = if (placeholder.isNotBlank()) { { Text(placeholder) } } else null,
             singleLine = singleLine,
             minLines = minLines,
             keyboardOptions = keyboardOptions,
             trailingIcon = trailing,
+            enabled = enabled,
         )
     }
 }

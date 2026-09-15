@@ -33,7 +33,30 @@ fun ServerScreen() {
             .padding(vertical = 4.dp),
     ) {
         SectionCard("网络", "server 子命令的网络相关参数") {
-            LabeledTextField("监听地址 (-bind)", p.bind, { set { bind = it } }, placeholder = "0.0.0.0:8765")
+            LabeledTextField(
+                "监听地址 (-bind)", p.bind, { set { bind = it } },
+                placeholder = "0.0.0.0:8765",
+                enabled = !p.reverseOnly,
+                hint = if (p.reverseOnly) "已开启「仅反向连接」，该参数不会传给 miaospeed" else null,
+            )
+            LabeledTextField(
+                "令牌 (-token)", p.token, { set { token = it } },
+                placeholder = "与面板/客户端一致的签名令牌",
+                hint = "用于请求签名，反向连接时还用于握手认证；填写后两端必须一致",
+            )
+            LabeledTextField(
+                "反向连接端点 (-connect)", p.connect, { set { connect = it } },
+                placeholder = "ws://面板地址:8766/",
+                hint = "本机没有公网 IP 时使用：由 miaospeed 主动拨出到面板的反向监听端口。" +
+                    "可填多个，用逗号或换行分隔；填写后必须同时配置 -token",
+                singleLine = false,
+                minLines = 3,
+            )
+            SwitchRow(
+                "仅反向连接（不监听 -bind）",
+                "开启后不传 -bind，只保留反向拨出；需先填写 -connect",
+                p.reverseOnly,
+            ) { set { reverseOnly = it } }
             LabeledTextField("WebSocket 路径 (-path)", p.path, { set { path = it } }, placeholder = "留空为 /（不安全）")
             LabeledTextField(
                 "允许访问的 IP 段 (-allowip)", p.allowip, { set { allowip = it } },

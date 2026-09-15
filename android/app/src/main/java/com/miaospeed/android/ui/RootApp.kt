@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -53,6 +54,8 @@ import com.miaospeed.android.AppRuntime
 import com.miaospeed.android.ConfigStore
 import com.miaospeed.android.MiaospeedService
 import com.miaospeed.android.ProcState
+import com.miaospeed.android.hasFlagValue
+import com.miaospeed.android.lastFlagValue
 import com.miaospeed.android.toArgs
 
 enum class MainTab(val label: String, val icon: ImageVector) {
@@ -78,7 +81,19 @@ fun MiaospeedApp() {
     fun startNow() {
         if (running) return
         val args = when (tab) {
-            MainTab.SERVER -> ConfigStore.server.value.toArgs()
+            MainTab.SERVER -> {
+                val s = ConfigStore.server.value
+                val a = s.toArgs()
+                if (s.reverseOnly && !a.hasFlagValue("connect")) {
+                    Toast.makeText(ctx, "已开启「仅反向连接」，请先填写 -connect 端点", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                if (a.hasFlagValue("connect") && a.lastFlagValue("token").isNullOrBlank()) {
+                    Toast.makeText(ctx, "-connect 需要 -token（也可写在「附加参数」里）", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                a
+            }
             MainTab.MISC -> ConfigStore.misc.value.toArgs()
             MainTab.SCRIPT -> {
                 val s = ConfigStore.script.value
@@ -112,6 +127,7 @@ fun MiaospeedApp() {
     }
 
     Scaffold(
+        modifier = Modifier.imePadding(),
         topBar = {
             TopAppBar(
                 title = { Text("MiaoSpeed") },
