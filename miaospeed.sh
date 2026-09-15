@@ -117,6 +117,7 @@ declare -A MSG_EN=(
     [SUGGEST_CHECK]="Please check your network or visit https://github.com/AirportR/miaospeed/releases"
     [COMPILATION_COMPLETE]="Compilation complete."
     [COMPILATION_FAILED]="Compilation failed!"
+    [NO_TLS_CERT]="No TLS certificate to embed. Put a .crt/.key pair into preconfigs/embeded/tls/ or install openssl."
     [SERVICE_ENABLED]="Service enabled"
     [INSTALL_SUCCESS]="MiaoSpeed installed successfully!"
     [DOCKER_DEPLOYED]="MiaoSpeed Docker deployed!"
@@ -342,6 +343,7 @@ declare -A MSG_ZH=(
     [SUGGEST_CHECK]="请检查网络或访问 https://github.com/AirportR/miaospeed/releases"
     [COMPILATION_COMPLETE]="编译完成。"
     [COMPILATION_FAILED]="编译失败!"
+    [NO_TLS_CERT]="没有可内嵌的 TLS 证书。请把一对 .crt/.key 放进 preconfigs/embeded/tls/，或先安装 openssl。"
     [SERVICE_ENABLED]="服务已启用"
     [INSTALL_SUCCESS]="MiaoSpeed 安装成功!"
     [DOCKER_DEPLOYED]="MiaoSpeed Docker 部署完成!"
@@ -1659,7 +1661,7 @@ compile_from_source() {
         return 1
     }
 
-    prepare_embedded_files
+    prepare_embedded_files || return 1
 
     log_info "$(_ BUILDING)"
     CGO_ENABLED=0 go build -trimpath -ldflags='-w -s -buildid=' -o miaospeed .
@@ -1680,21 +1682,27 @@ compile_from_source() {
 
 prepare_embedded_files() {
     mkdir -p utils/embeded
-    mkdir -p preconfigs/embeded/miaokoCA
+    mkdir -p preconfigs/embeded/tls
     mkdir -p engine/embeded
 
     if [[ ! -f "utils/embeded/BUILDTOKEN.key" ]]; then
         echo "MIAOKO4|580JxAo049R|GEnERAl|1X571R930|T0kEN" > utils/embeded/BUILDTOKEN.key
     fi
 
-    if [[ ! -f "preconfigs/embeded/miaokoCA/miaoko.crt" ]]; then
+    # preconfigs/embeded/tls 整个目录会被内嵌，且编译要求这里至少有一对 TLS 证书。
+    # 没有证书就直接失败，不再写占位内容：占位内容不是证书，只会产出一个起不来的二进制。
+    if [[ -z "$(ls preconfigs/embeded/tls/*.crt 2>/dev/null)" ]]; then
+        if ! command -v openssl >/dev/null 2>&1; then
+            log_error "$(_ NO_TLS_CERT)"
+            return 1
+        fi
         openssl req -x509 -newkey rsa:2048 -nodes \
-            -keyout preconfigs/embeded/miaokoCA/miaoko.key \
-            -out preconfigs/embeded/miaokoCA/miaoko.crt \
+            -keyout preconfigs/embeded/tls/miaoko.key \
+            -out preconfigs/embeded/tls/miaoko.crt \
             -days 3650 \
             -subj "/C=US/ST=State/L=City/O=MiaoSpeed/CN=miaospeed" 2>/dev/null || {
-            echo "DUMMY_CERT" > preconfigs/embeded/miaokoCA/miaoko.crt
-            echo "DUMMY_KEY" > preconfigs/embeded/miaokoCA/miaoko.key
+            log_error "$(_ NO_TLS_CERT)"
+            return 1
         }
     fi
 
