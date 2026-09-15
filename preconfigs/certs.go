@@ -89,23 +89,30 @@ func loadEmbeddedTLSCerts() []tls.Certificate {
 	return certs
 }
 
-var extraServerCerts []tls.Certificate
+// overrideServerCert, when set through -serverpublickey / -serverprivatekey,
+// replaces the embedded certificates outright.
+var overrideServerCert *tls.Certificate
 
-func AppendServerCertificate(crtPEM, keyPEM string) error {
+// SetServerCertificate replaces the embedded certificates with the given PEM
+// pair, instead of serving the pair next to them.
+func SetServerCertificate(crtPEM, keyPEM string) error {
 	cert, err := tls.X509KeyPair([]byte(crtPEM), []byte(keyPEM))
 	if err != nil {
 		return err
 	}
-	extraServerCerts = append(extraServerCerts, cert)
+	overrideServerCert = &cert
 	return nil
 }
 
 func MakeSelfSignedTLSServer() *tls.Config {
-	embeddedCerts := loadEmbeddedTLSCerts()
-
-	certs := make([]tls.Certificate, 0, len(extraServerCerts)+len(embeddedCerts))
-	certs = append(certs, extraServerCerts...)
-	certs = append(certs, embeddedCerts...)
+	// The pair given at runtime wins outright: once -serverpublickey /
+	// -serverprivatekey are set, that pair is the only certificate served.
+	var certs []tls.Certificate
+	if overrideServerCert != nil {
+		certs = []tls.Certificate{*overrideServerCert}
+	} else {
+		certs = loadEmbeddedTLSCerts()
+	}
 
 	// Construct a tls.config
 	tlsConfig := &tls.Config{
