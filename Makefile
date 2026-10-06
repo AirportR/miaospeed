@@ -1,6 +1,6 @@
 NAME=miaospeed
 BINDIR=bin
-MIHOMO_VERSION=$(shell grep "github.com/metacubex/mihomo" go.mod | awk '{print $2}' || echo "Unknown")
+MIHOMO_VERSION=$(shell grep -m1 "github.com/metacubex/mihomo" go.mod | awk '{print $2}' || echo "Unknown")
 VERSION=$(shell git describe --tags --abbrev=0 | head -n 1 || echo "Unknown")
 BUILDTIME=$(shell date -u '+%Y-%m-%d_%I:%M:%S%p(UTC%:z)')
 COMMIT=$(shell git rev-parse --short HEAD || echo "Unknown")

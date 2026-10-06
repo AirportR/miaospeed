@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/common/lru"
+	"github.com/metacubex/mihomo/component/resolver"
 	mihomoConfig "github.com/metacubex/mihomo/config"
 	mihomoConst "github.com/metacubex/mihomo/constant"
 	mihomoDNS "github.com/metacubex/mihomo/dns"
@@ -25,12 +26,12 @@ import (
 const (
 	mihomoDNSServerPrefix = "mihomo://"
 
-	mihomoDNSTokenCacheMaxEntries     = 1024
-	mihomoDNSClientCacheMaxEntries    = 256
-	mihomoDNSFileStateCacheMaxEntries = 256
-	mihomoDNSCacheIdleSeconds          int64 = 30 * 60
-	mihomoDNSLookupLogWindowSeconds    int64 = 15
-	mihomoDNSLookupLogCacheMaxEntries        = 4096
+	mihomoDNSTokenCacheMaxEntries           = 1024
+	mihomoDNSClientCacheMaxEntries          = 256
+	mihomoDNSFileStateCacheMaxEntries       = 256
+	mihomoDNSCacheIdleSeconds         int64 = 30 * 60
+	mihomoDNSLookupLogWindowSeconds   int64 = 15
+	mihomoDNSLookupLogCacheMaxEntries       = 4096
 )
 
 type MihomoDNSClient struct {
@@ -39,6 +40,11 @@ type MihomoDNSClient struct {
 	directResolver *mihomoDNS.Resolver
 	ipv6           bool
 	dnsTrace       string
+	// hosts holds the compiled `hosts:` trie of this config. It is consulted
+	// before any upstream resolver so that hosts entries short-circuit
+	// nameserver-policy and the main/proxy/direct resolvers, matching how
+	// mihomo's withHosts middleware sits at the outermost layer.
+	hosts *resolver.Hosts
 }
 
 type mihomoDNSTokenParseCacheEntry struct {
@@ -230,13 +236,15 @@ func formatMihomoNameServerList(nameServers []mihomoDNS.NameServer) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-func buildMihomoDNSTrace(dnsCfg *mihomoConfig.DNS) string {
+func buildMihomoDNSTrace(dnsCfg *mihomoConfig.DNS, hosts *resolver.Hosts) string {
 	if dnsCfg == nil {
 		return "dns=nil"
 	}
 	return fmt.Sprintf(
-		"ipv6=%t main=%s fallback=%s default=%s proxy=%s direct=%s policy=%d proxyPolicy=%d",
+		"ipv6=%t useHosts=%t hosts=%d main=%s fallback=%s default=%s proxy=%s direct=%s policy=%d proxyPolicy=%d",
 		dnsCfg.IPv6,
+		dnsCfg.UseHosts,
+		mihomoHostsEntryCount(hosts),
 		formatMihomoNameServerList(dnsCfg.NameServer),
 		formatMihomoNameServerList(dnsCfg.Fallback),
 		formatMihomoNameServerList(dnsCfg.DefaultNameserver),
@@ -245,6 +253,41 @@ func buildMihomoDNSTrace(dnsCfg *mihomoConfig.DNS) string {
 		len(dnsCfg.NameServerPolicy),
 		len(dnsCfg.ProxyServerPolicy),
 	)
+}
+
+func mihomoHostsEntryCount(hosts *resolver.Hosts) int {
+	if hosts == nil || hosts.DomainTrie == nil {
+		return 0
+	}
+	count := 0
+	hosts.DomainTrie.Foreach(func(_ string, _ resolver.HostValue) bool {
+		count++
+		return true
+	})
+	return count
+}
+
+// buildMihomoHosts compiles the config's `hosts:` section into a lookup-ready
+// resolver.Hosts.
+//
+// mihomo normally installs hosts through executor.ApplyConfig -> updateHosts(),
+// which assigns the package-global resolver.DefaultHosts that the dns.withHosts
+// middleware reads. This project builds a standalone resolver and never runs the
+// executor, so without this step the entire `hosts:` section would be silently
+// ignored. We keep the trie on the client instead of touching that global so that
+// concurrent lookups belonging to different configs cannot clobber each other.
+//
+// `config.Parse` has already expanded special values (e.g. `lan`) and resolved
+// `hosts: a.com: b.com` chains, so cfg.Hosts is ready to use verbatim.
+func buildMihomoHosts(cfg *mihomoConfig.Config) *resolver.Hosts {
+	if cfg == nil || cfg.DNS == nil || !cfg.DNS.UseHosts {
+		return nil
+	}
+	if cfg.Hosts == nil || cfg.Hosts.IsEmpty() {
+		return nil
+	}
+	hosts := resolver.NewHosts(cfg.Hosts)
+	return &hosts
 }
 
 func sanitizeMihomoPolicies(policies []mihomoDNS.Policy) []mihomoDNS.Policy {
@@ -364,7 +407,8 @@ func newMihomoDNSClientFromConfigBytes(configContent []byte) (*MihomoDNSClient, 
 		return nil, fmt.Errorf("mihomo dns is disabled in config")
 	}
 	sanitizeMihomoDNSConfigForLookup(cfg.DNS)
-	dnsTrace := buildMihomoDNSTrace(cfg.DNS)
+	hosts := buildMihomoHosts(cfg)
+	dnsTrace := buildMihomoDNSTrace(cfg.DNS, hosts)
 
 	ipv6 := cfg.DNS.IPv6
 	if cfg.General != nil {
@@ -398,6 +442,7 @@ func newMihomoDNSClientFromConfigBytes(configContent []byte) (*MihomoDNSClient, 
 		directResolver: resolvers.DirectResolver,
 		ipv6:           ipv6,
 		dnsTrace:       dnsTrace,
+		hosts:          hosts,
 	}, nil
 }
 
@@ -489,8 +534,8 @@ func getCachedMihomoDNSClientFromConfigFile(configPath string) (*MihomoDNSClient
 	}
 
 	mihomoDNSFileStateCache.Set(absPath, &mihomoDNSFileStateCacheEntry{
-		modTime: fileInfo.ModTime(),
-		size:    fileInfo.Size(),
+		modTime:    fileInfo.ModTime(),
+		size:       fileInfo.Size(),
 		configHash: cacheKey,
 	})
 
@@ -514,6 +559,58 @@ func getCachedMihomoDNSClientFromConfigBytes(configContent []byte) (*MihomoDNSCl
 	return getCachedMihomoDNSClientByHash(cacheKey, configContent)
 }
 
+// lookupHosts resolves a domain straight from the config's `hosts:` section.
+//
+// It mirrors mihomo's dns.withHosts, which is the outermost middleware: a hosts
+// hit short-circuits nameserver-policy and every upstream resolver. The second
+// return value reports whether the domain matched a hosts entry at all, so
+// callers can distinguish "not in hosts, keep resolving" from "in hosts".
+func (c *MihomoDNSClient) lookupHosts(domain string) ([]net.IP, bool) {
+	if c == nil || c.hosts == nil || c.hosts.DomainTrie == nil {
+		return nil, false
+	}
+
+	domain = strings.TrimRight(strings.TrimSpace(domain), ".")
+	if domain == "" {
+		return nil, false
+	}
+
+	// isDomain=false asks only for entries that map to literal IPs. A domain ->
+	// domain mapping (e.g. `hosts: a.com: b.com`) is deliberately not followed
+	// here: this project needs real IPs, and such mappings are mainly consumed
+	// by mihomo's own fake-ip/CNAME path.
+	record, matched := c.hosts.Search(domain, false)
+	if !matched || record == nil || record.IsDomain || len(record.IPs) == 0 {
+		return nil, false
+	}
+
+	ips := make([]net.IP, 0, len(record.IPs))
+	seen := map[string]struct{}{}
+	for _, addr := range record.IPs {
+		if !addr.IsValid() {
+			continue
+		}
+		addr = addr.Unmap()
+		if !c.ipv6 && !addr.Is4() {
+			continue
+		}
+		ip := net.IP(addr.AsSlice())
+		ipKey := ip.String()
+		if _, ok := seen[ipKey]; ok {
+			continue
+		}
+		seen[ipKey] = struct{}{}
+		ips = append(ips, ip)
+	}
+
+	if len(ips) == 0 {
+		// Matched, but no address usable under the current ipv6 setting; fall
+		// through to the normal resolvers rather than failing the lookup.
+		return nil, false
+	}
+	return ips, true
+}
+
 func (c *MihomoDNSClient) lookupWithResolver(ctx context.Context, domain string, resolver *mihomoDNS.Resolver) ([]net.IP, error) {
 	if c == nil || resolver == nil || !resolver.Invalid() {
 		return nil, fmt.Errorf("mihomo dns client is not initialized")
@@ -522,6 +619,11 @@ func (c *MihomoDNSClient) lookupWithResolver(ctx context.Context, domain string,
 	domain = strings.TrimSpace(domain)
 	if domain == "" {
 		return nil, fmt.Errorf("empty domain")
+	}
+
+	// hosts entries take precedence over every resolver, as in mihomo.
+	if ips, ok := c.lookupHosts(domain); ok {
+		return ips, nil
 	}
 
 	var (
@@ -564,6 +666,8 @@ func (c *MihomoDNSClient) lookupWithResolver(ctx context.Context, domain string,
 }
 
 func (c *MihomoDNSClient) LookupIP(ctx context.Context, domain string) ([]net.IP, error) {
+	// lookupWithResolver already applies the hosts override, the empty-domain
+	// check and the resolver nil-check.
 	return c.lookupWithResolver(ctx, domain, c.resolver)
 }
 

@@ -1,6 +1,7 @@
 # temp files
 temp.png
 goreleaser*
+.gocache/
 # built artifacts
 miaoko
 /miaospeed
