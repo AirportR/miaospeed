@@ -28,6 +28,7 @@ const (
 	TrustTunnel ProxyType = "TrustTunnel"
 	GostRelay   ProxyType = "GostRelay"
 	ShadowQuic  ProxyType = "ShadowQuic"
+	X365        ProxyType = "X365"
 	// OpenVPN support is currently treated as experimental in miaospeed.
 	OpenVPN ProxyType = "OpenVPN"
 
@@ -36,7 +37,7 @@ const (
 
 var AllProxyTypes = []ProxyType{
 	Shadowsocks, ShadowsocksR, Snell, Socks5, Http, Vmess, Trojan,
-	Vless, Hysteria, Hysteria2, TUIC, Wireguard, SSH, Mieru, AnyTLS, Sudoku, Masque, TrustTunnel, GostRelay, ShadowQuic, OpenVPN,
+	Vless, Hysteria, Hysteria2, TUIC, Wireguard, SSH, Mieru, AnyTLS, Sudoku, Masque, TrustTunnel, GostRelay, ShadowQuic, X365, OpenVPN,
 }
 
 func (pt *ProxyType) Equal(other ProxyType) bool {
