@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/netip"
 	"strings"
 	"time"
 
@@ -79,70 +78,6 @@ func (c *Clash) rebuildProxy() {
 	}
 }
 
-func pickResolvedIPForNetwork(ips []net.IP, network interfaces.RequestOptionsNetwork) (netip.Addr, bool) {
-	if network == interfaces.ROptionsTCP6 {
-		for _, ip := range ips {
-			addr, ok := netip.AddrFromSlice(ip)
-			if !ok {
-				continue
-			}
-			addr = addr.Unmap()
-			if addr.Is6() {
-				return addr, true
-			}
-		}
-		return netip.Addr{}, false
-	}
-
-	for _, ip := range ips {
-		addr, ok := netip.AddrFromSlice(ip)
-		if !ok {
-			continue
-		}
-		addr = addr.Unmap()
-		if addr.Is4() {
-			return addr, true
-		}
-	}
-
-	for _, ip := range ips {
-		addr, ok := netip.AddrFromSlice(ip)
-		if !ok {
-			continue
-		}
-		addr = addr.Unmap()
-		if addr.Is6() {
-			return addr, true
-		}
-	}
-
-	return netip.Addr{}, false
-}
-
-func (c *Clash) applyMihomoDNSForDial(addr *constant.Metadata, network interfaces.RequestOptionsNetwork) {
-	if c == nil || addr == nil || addr.Host == "" || len(c.dnsServers) == 0 {
-		return
-	}
-	if _, err := netip.ParseAddr(addr.Host); err == nil {
-		return
-	}
-
-	ips, matched, err := utils.LookupByMihomoDNSServers(addr.Host, c.dnsServers)
-	if !matched {
-		return
-	}
-	if err != nil {
-		return
-	}
-	resolvedIP, ok := pickResolvedIPForNetwork(ips, network)
-	if !ok {
-		return
-	}
-
-	addr.DstIP = resolvedIP
-	addr.Host = ""
-}
-
 func (c *Clash) DialTCP(ctx context.Context, url string, network interfaces.RequestOptionsNetwork) (net.Conn, error) {
 	if c == nil || c.proxy == nil {
 		return nil, fmt.Errorf("should call Build() before run")
@@ -160,7 +95,6 @@ func (c *Clash) DialTCP(ctx context.Context, url string, network interfaces.Requ
 		if err != nil {
 			ch <- result{nil, fmt.Errorf("cannot build tcp context: %v", err)}
 		}
-		c.applyMihomoDNSForDial(&addr, network)
 		conn, err := c.proxy.DialContext(ctx, &addr)
 		if err != nil && !strings.Contains(err.Error(), "timeout") && !strings.Contains(err.Error(), "no such host") {
 			utils.DLogf("cannot dialTCP: %s | proxy=%s | vendor=Clash | err=%s", url, c.proxy.Name(), err.Error())

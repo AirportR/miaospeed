@@ -239,18 +239,18 @@ func (c *stunServerConn) roundTrip(msg *stun.Message, addr net.Addr, timeout int
 func listen(conn net.PacketConn) (messages chan *stun.Message) {
 	messages = make(chan *stun.Message)
 	go func() {
+		readBuf := make([]byte, 1024)
 		for {
-			buf := make([]byte, 1024)
-
-			n, _, err := conn.ReadFrom(buf)
+			n, _, err := conn.ReadFrom(readBuf)
 			if err != nil {
 				close(messages)
 				return
 			}
-			buf = buf[:n]
+			payload := make([]byte, n)
+			copy(payload, readBuf[:n])
 
 			m := new(stun.Message)
-			m.Raw = buf
+			m.Raw = payload
 			err = m.Decode()
 			if err != nil {
 				close(messages)

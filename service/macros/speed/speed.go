@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	jsoniter "github.com/json-iterator/go"
@@ -77,7 +78,7 @@ func Once(speed *Speed, proxy interfaces.Vendor, cfg *interfaces.SlaveRequestCon
 
 func SingleThread(downloadFiles []string, proxy interfaces.Vendor, timeoutSeconds int64, wc *WriteCounter) context.CancelFunc {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds+1)*time.Second)
-	isCancelled := false
+	var cancelled atomic.Bool
 
 	downloadFilesCopy := downloadFiles[:]
 	fileLen := len(downloadFilesCopy)
@@ -94,7 +95,7 @@ func SingleThread(downloadFiles []string, proxy interfaces.Vendor, timeoutSecond
 		// 100 only for safty
 		for i := 0; i < 100; i++ {
 			// if outside cancel or deadline meet(either by time or by hand)
-			if isCancelled || ctx.Err() != nil {
+			if cancelled.Load() || ctx.Err() != nil {
 				return
 			}
 			// download file
@@ -134,7 +135,7 @@ func SingleThread(downloadFiles []string, proxy interfaces.Vendor, timeoutSecond
 
 	<-readyChan
 	return func() {
-		isCancelled = true
+		cancelled.Store(true)
 		cancel()
 	}
 }
@@ -310,7 +311,7 @@ func UploadOnceChunked(speed *UploadSpeed, proxy interfaces.Vendor, cfg *interfa
 // SingleUploadThreadChunked 单线程 chunked 上传
 func SingleUploadThreadChunked(uploadURL string, proxy interfaces.Vendor, timeoutSeconds int64, rc *ReadCounter) context.CancelFunc {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds+3)*time.Second)
-	isCancelled := false
+	var cancelled atomic.Bool
 	readyChan := make(chan bool)
 
 	go func() {
@@ -326,7 +327,7 @@ func SingleUploadThreadChunked(uploadURL string, proxy interfaces.Vendor, timeou
 
 		// 100 only for safety
 		for i := 0; i < 100; i++ {
-			if isCancelled || ctx.Err() != nil {
+			if cancelled.Load() || ctx.Err() != nil {
 				return
 			}
 			pr, pw := io.Pipe()
@@ -401,7 +402,7 @@ func SingleUploadThreadChunked(uploadURL string, proxy interfaces.Vendor, timeou
 				}
 			}
 
-			if isCancelled || ctx.Err() != nil {
+			if cancelled.Load() || ctx.Err() != nil {
 				return
 			}
 
@@ -416,7 +417,7 @@ func SingleUploadThreadChunked(uploadURL string, proxy interfaces.Vendor, timeou
 
 	<-readyChan
 	return func() {
-		isCancelled = true
+		cancelled.Store(true)
 		cancel()
 	}
 }

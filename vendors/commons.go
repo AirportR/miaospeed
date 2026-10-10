@@ -2,6 +2,7 @@ package vendors
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -10,12 +11,138 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"reflect"
+	"sync"
 	"time"
 
 	"github.com/airportr/miaospeed/interfaces"
 	"github.com/airportr/miaospeed/utils"
 	"github.com/airportr/miaospeed/utils/structs"
 )
+
+const requestTransportCacheLimit = 128
+
+type requestTransportCacheKey struct {
+	vendorRef string
+	network   interfaces.RequestOptionsNetwork
+	sni       string
+}
+
+type requestTransportCacheEntry struct {
+	key       requestTransportCacheKey
+	transport *http.Transport
+}
+
+type requestTransportLRU struct {
+	lock       sync.Mutex
+	entries    map[requestTransportCacheKey]*list.Element
+	lru        *list.List
+	maxEntries int
+}
+
+func newRequestTransportLRU(maxEntries int) *requestTransportLRU {
+	if maxEntries <= 0 {
+		maxEntries = 1
+	}
+
+	return &requestTransportLRU{
+		entries:    make(map[requestTransportCacheKey]*list.Element),
+		lru:        list.New(),
+		maxEntries: maxEntries,
+	}
+}
+
+func (c *requestTransportLRU) getOrInit(key requestTransportCacheKey, init func() *http.Transport) *http.Transport {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	if ele, ok := c.entries[key]; ok {
+		c.lru.MoveToFront(ele)
+		if entry, ok := ele.Value.(*requestTransportCacheEntry); ok && entry != nil && entry.transport != nil {
+			return entry.transport
+		}
+	}
+
+	transport := init()
+	entry := &requestTransportCacheEntry{
+		key:       key,
+		transport: transport,
+	}
+	ele := c.lru.PushFront(entry)
+	c.entries[key] = ele
+
+	for len(c.entries) > c.maxEntries {
+		c.removeOldestLocked()
+	}
+
+	return transport
+}
+
+func (c *requestTransportLRU) removeOldestLocked() {
+	ele := c.lru.Back()
+	if ele == nil {
+		return
+	}
+
+	c.lru.Remove(ele)
+	entry, ok := ele.Value.(*requestTransportCacheEntry)
+	if !ok || entry == nil {
+		return
+	}
+
+	delete(c.entries, entry.key)
+	if entry.transport != nil {
+		entry.transport.CloseIdleConnections()
+	}
+}
+
+var requestTransportCache = newRequestTransportLRU(requestTransportCacheLimit)
+
+func vendorReference(p interfaces.Vendor) string {
+	if p == nil {
+		return "<nil>"
+	}
+
+	rv := reflect.ValueOf(p)
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return fmt.Sprintf("%T@<nil>", p)
+		}
+		return fmt.Sprintf("%T@%x", p, rv.Pointer())
+	}
+
+	return fmt.Sprintf("%T@%v", p, p.ProxyInfo())
+}
+
+func getOrInitTransport(p interfaces.Vendor, network interfaces.RequestOptionsNetwork, sni string) *http.Transport {
+	key := requestTransportCacheKey{
+		vendorRef: vendorReference(p),
+		network:   network,
+		sni:       sni,
+	}
+
+	return requestTransportCache.getOrInit(key, func() *http.Transport {
+		transport := &http.Transport{
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   100,
+			IdleConnTimeout:       10 * time.Second,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+		if sni != "" {
+			transport.TLSClientConfig = &tls.Config{ServerName: sni}
+		}
+
+		transport.DialContext = func(reqCtx context.Context, _ string, addr string) (net.Conn, error) {
+			if p != nil {
+				return p.DialTCP(reqCtx, formatDialAddressToURL(addr), network)
+			}
+			return utils.DialContext(reqCtx, network.String(), addr)
+		}
+
+		return transport
+	})
+}
 
 // for all methods in commons
 // if proxy is nil, fallback to system
@@ -55,31 +182,7 @@ func RequestUnsafe(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.
 	}
 	req = req.WithContext(ctx)
 
-	tlsConf := tls.Config{}
-
-	if reqOpt.SNI != "" {
-		tlsConf.ServerName = reqOpt.SNI
-	}
-
-	// connect proxy bridge
-	// init params copied from http.DefaultTransport
-	transport := &http.Transport{
-		MaxIdleConns:          100,
-		IdleConnTimeout:       10 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig:       &tlsConf,
-	}
-
-	transport.DialContext = func(reqCtx context.Context, _ string, addr string) (net.Conn, error) {
-		if reqCtx == nil {
-			reqCtx = ctx
-		}
-		if p != nil {
-			return p.DialTCP(reqCtx, formatDialAddressToURL(addr), reqOpt.Network)
-		}
-		return utils.DialContext(reqCtx, reqOpt.Network.String(), addr)
-	}
+	transport := getOrInitTransport(p, reqOpt.Network, reqOpt.SNI)
 
 	// make a list to record all redirects
 	// the maximum count of redirection is 64

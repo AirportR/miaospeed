@@ -6,9 +6,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/airportr/miaospeed/utils"
+	"github.com/metacubex/mihomo/component/resolver"
 	mdns "github.com/miekg/dns"
 )
 
@@ -270,6 +272,252 @@ func TestLookupByMihomoConfigBytes_NameserverProxyTagSanitized(t *testing.T) {
 	}
 	if !containsIP(ips, "2001:db8::42") {
 		t.Fatalf("expected AAAA record from sanitized nameserver #DIRECT lookup, got %v", ips)
+	}
+}
+
+// TestLookupByMihomoConfigBytes_HostsApplied verifies that a `hosts:` entry
+// short-circuits upstream resolution. The nameserver points at a local server
+// returning 198.51.100.42, so a hosts hit is unambiguously distinguishable.
+func TestLookupByMihomoConfigBytes_HostsApplied(t *testing.T) {
+	nameServer, closeFn := startLocalDNSServer(t)
+	defer closeFn()
+
+	configBytes := []byte(fmt.Sprintf(`hosts:
+  mapped.example.com: 10.11.12.13
+dns:
+  enable: true
+  ipv6: false
+  use-hosts: true
+  nameserver:
+    - %s
+  default-nameserver:
+    - 127.0.0.1
+`, nameServer))
+
+	ips, err := utils.LookupByMihomoConfigBytes(configBytes, "mapped.example.com")
+	if err != nil {
+		t.Fatalf("hosts lookup should succeed: %v", err)
+	}
+	if !containsIP(ips, "10.11.12.13") {
+		t.Fatalf("expected hosts entry 10.11.12.13, got %v", ips)
+	}
+	if containsIP(ips, "198.51.100.42") {
+		t.Fatalf("hosts entry must not fall through to nameserver, got %v", ips)
+	}
+
+	// an unmapped domain must still reach the nameserver
+	other, err := utils.LookupByMihomoConfigBytes(configBytes, "unmapped.example.com")
+	if err != nil {
+		t.Fatalf("unmapped lookup should succeed: %v", err)
+	}
+	if !containsIP(other, "198.51.100.42") {
+		t.Fatalf("unmapped domain should use nameserver, got %v", other)
+	}
+}
+
+// TestLookupByMihomoConfigBytes_HostsDisabled confirms `use-hosts: false`
+// suppresses the hosts section, matching mihomo.
+func TestLookupByMihomoConfigBytes_HostsDisabled(t *testing.T) {
+	nameServer, closeFn := startLocalDNSServer(t)
+	defer closeFn()
+
+	configBytes := []byte(fmt.Sprintf(`hosts:
+  mapped.example.com: 10.11.12.13
+dns:
+  enable: true
+  ipv6: false
+  use-hosts: false
+  nameserver:
+    - %s
+  default-nameserver:
+    - 127.0.0.1
+`, nameServer))
+
+	ips, err := utils.LookupByMihomoConfigBytes(configBytes, "mapped.example.com")
+	if err != nil {
+		t.Fatalf("lookup should succeed: %v", err)
+	}
+	if containsIP(ips, "10.11.12.13") {
+		t.Fatalf("use-hosts=false must ignore hosts section, got %v", ips)
+	}
+	if !containsIP(ips, "198.51.100.42") {
+		t.Fatalf("expected nameserver result, got %v", ips)
+	}
+}
+
+// TestLookupByMihomoConfigBytes_HostsOverridesPolicy verifies hosts takes
+// precedence over nameserver-policy, matching mihomo's middleware order.
+func TestLookupByMihomoConfigBytes_HostsOverridesPolicy(t *testing.T) {
+	mainNameServer, closeMain := startLocalDNSServerWithRecords(t, "203.0.113.10", "2001:db8::10")
+	defer closeMain()
+
+	policyNameServer, closePolicy := startLocalDNSServerWithRecords(t, "198.51.100.42", "2001:db8::42")
+	defer closePolicy()
+
+	configBytes := []byte(fmt.Sprintf(`hosts:
+  www.policy.test: 10.11.12.13
+dns:
+  enable: true
+  ipv6: false
+  use-hosts: true
+  nameserver:
+    - %s
+  default-nameserver:
+    - 127.0.0.1
+  nameserver-policy:
+    "+.policy.test": %s
+`, mainNameServer, policyNameServer))
+
+	ips, err := utils.LookupByMihomoConfigBytes(configBytes, "www.policy.test")
+	if err != nil {
+		t.Fatalf("lookup should succeed: %v", err)
+	}
+	if !containsIP(ips, "10.11.12.13") {
+		t.Fatalf("hosts must win over nameserver-policy, got %v", ips)
+	}
+	if containsIP(ips, "198.51.100.42") {
+		t.Fatalf("policy resolver must not be consulted on a hosts hit, got %v", ips)
+	}
+}
+
+// TestLookupByMihomoConfigBytes_HostsMultipleIPs covers a hosts entry with
+// several addresses, which mihomo expands into a multi-IP answer.
+func TestLookupByMihomoConfigBytes_HostsMultipleIPs(t *testing.T) {
+	nameServer, closeFn := startLocalDNSServer(t)
+	defer closeFn()
+
+	configBytes := []byte(fmt.Sprintf(`hosts:
+  multi.example.com:
+    - 10.11.12.13
+    - 10.11.12.14
+dns:
+  enable: true
+  ipv6: false
+  use-hosts: true
+  nameserver:
+    - %s
+  default-nameserver:
+    - 127.0.0.1
+`, nameServer))
+
+	ips, err := utils.LookupByMihomoConfigBytes(configBytes, "multi.example.com")
+	if err != nil {
+		t.Fatalf("multi-ip hosts lookup should succeed: %v", err)
+	}
+	if !containsIP(ips, "10.11.12.13") || !containsIP(ips, "10.11.12.14") {
+		t.Fatalf("expected both hosts IPs, got %v", ips)
+	}
+}
+
+// TestLookupByMihomoConfigBytes_HostsDoesNotTouchGlobalResolver ensures the fix
+// keeps hosts per-client, so concurrent lookups with different configs cannot
+// clobber one another through mihomo's package-global resolver.DefaultHosts.
+func TestLookupByMihomoConfigBytes_HostsDoesNotTouchGlobalResolver(t *testing.T) {
+	nameServer, closeFn := startLocalDNSServer(t)
+	defer closeFn()
+
+	before, _ := resolver.DefaultHosts.Search("global-probe.example.com", false)
+	if before != nil {
+		t.Fatalf("precondition failed: global hosts already has an entry")
+	}
+
+	configBytes := []byte(fmt.Sprintf(`hosts:
+  global-probe.example.com: 10.11.12.13
+dns:
+  enable: true
+  ipv6: false
+  use-hosts: true
+  nameserver:
+    - %s
+  default-nameserver:
+    - 127.0.0.1
+`, nameServer))
+
+	ips, err := utils.LookupByMihomoConfigBytes(configBytes, "global-probe.example.com")
+	if err != nil {
+		t.Fatalf("lookup should succeed: %v", err)
+	}
+	if !containsIP(ips, "10.11.12.13") {
+		t.Fatalf("expected hosts hit, got %v", ips)
+	}
+
+	// the entry must be visible only through the client, never globally
+	after, _ := resolver.DefaultHosts.Search("global-probe.example.com", false)
+	if after != nil {
+		t.Fatalf("fix must not write to the package-global resolver.DefaultHosts")
+	}
+}
+
+// TestLookupByMihomoConfigBytes_HostsConcurrentConfigs runs two configs with
+// conflicting hosts entries in parallel and asserts answers never cross over.
+func TestLookupByMihomoConfigBytes_HostsConcurrentConfigs(t *testing.T) {
+	nameServer, closeFn := startLocalDNSServer(t)
+	defer closeFn()
+
+	build := func(ip string) []byte {
+		return []byte(fmt.Sprintf(`hosts:
+  shared.example.com: %s
+dns:
+  enable: true
+  ipv6: false
+  use-hosts: true
+  nameserver:
+    - %s
+  default-nameserver:
+    - 127.0.0.1
+`, ip, nameServer))
+	}
+
+	configA := build("10.11.12.13")
+	configB := build("10.11.12.14")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 24; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			ips, err := utils.LookupByMihomoConfigBytes(configA, "shared.example.com")
+			if err != nil || !containsIP(ips, "10.11.12.13") || containsIP(ips, "10.11.12.14") {
+				t.Errorf("config A leaked: ips=%v err=%v", ips, err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			ips, err := utils.LookupByMihomoConfigBytes(configB, "shared.example.com")
+			if err != nil || !containsIP(ips, "10.11.12.14") || containsIP(ips, "10.11.12.13") {
+				t.Errorf("config B leaked: ips=%v err=%v", ips, err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// TestLookupByMihomoConfigBytes_HostsWinsOverPolicyOnMayoDomain is a live check
+// against the real-world iKuuu config shape: hosts must beat nameserver-policy.
+func TestLookupByMihomoConfigBytes_HostsIPv6FilteredOut(t *testing.T) {
+	nameServer, closeFn := startLocalDNSServer(t)
+	defer closeFn()
+
+	configBytes := []byte(fmt.Sprintf(`hosts:
+  v6only.example.com: "2001:db8::99"
+dns:
+  enable: true
+  ipv6: false
+  use-hosts: true
+  nameserver:
+    - %s
+  default-nameserver:
+    - 127.0.0.1
+`, nameServer))
+
+	// ipv6 disabled: the AAAA-only hosts entry yields nothing, so the lookup must
+	// gracefully fall through to the nameserver instead of failing.
+	ips, err := utils.LookupByMihomoConfigBytes(configBytes, "v6only.example.com")
+	if err != nil {
+		t.Fatalf("lookup should fall through, got error: %v", err)
+	}
+	if !containsIP(ips, "198.51.100.42") {
+		t.Fatalf("expected fall-through to nameserver, got %v", ips)
 	}
 }
 

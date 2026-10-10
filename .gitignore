@@ -1,15 +1,20 @@
 # temp files
 temp.png
 goreleaser*
+.gocache/
 # built artifacts
 miaoko
-miaospeed
+/miaospeed
+bin/
+/*.exe
 dist
 *.tgz
 *.dev.sh
 build.*.sh
 *.mmdb
 .idea/
+.reasonix/
+.codex/
 
 # configs
 test.yaml
@@ -29,3 +34,17 @@ fonts
 # miscs
 .DS_Store
 ._.DS_Store
+
+# local test certificates (includes a private key, never commit)
+certs/
+
+# android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/*.jks
+android/*.keystore
+android/keystore.properties
+android/.kotlin/
+android/app/src/main/jniLibs/

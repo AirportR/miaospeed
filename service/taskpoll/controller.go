@@ -38,9 +38,20 @@ type TPController struct {
 
 	taskPoll    []*taskPollItemWrapper
 	runningTask map[string]int
+	wakeCh      chan struct{}
 
 	current  atomic.Uint32
 	pollLock sync.Mutex
+}
+
+func (tpc *TPController) signalWake() {
+	if tpc == nil || tpc.wakeCh == nil {
+		return
+	}
+	select {
+	case tpc.wakeCh <- struct{}{}:
+	default:
+	}
 }
 
 func (tpc *TPController) Name() string {
@@ -84,9 +95,6 @@ func (tpc *TPController) populate() (int, *taskPollItemWrapper) {
 		}
 	}
 
-	// no task left
-	time.Sleep(tpc.emptyWait)
-
 	return 0, nil
 }
 
@@ -107,6 +115,7 @@ func (tpc *TPController) release(tpw *taskPollItemWrapper) {
 		// atomic
 		tpc.current.Add(^uint32(0))
 	}
+	tpc.signalWake()
 }
 
 func (tpc *TPController) AwaitingCount() int {
@@ -132,6 +141,26 @@ func (tpc *TPController) UnsafeAwaitingCount() int {
 
 func (tpc *TPController) Start() {
 	sigTerm := utils.MakeSysChan()
+	waitDuration := tpc.emptyWait
+	if waitDuration <= 0 {
+		waitDuration = 200 * time.Millisecond
+	}
+	idleTimer := time.NewTimer(waitDuration)
+	if !idleTimer.Stop() {
+		select {
+		case <-idleTimer.C:
+		default:
+		}
+	}
+	drainTimer := func() {
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+	}
+	defer drainTimer()
 
 	for {
 		select {
@@ -139,24 +168,32 @@ func (tpc *TPController) Start() {
 			utils.DLog("task server shutted down.")
 			return
 		default:
-			if itemIdx, tpw := tpc.populate(); tpw != nil {
-				utils.DLogf("Task Poll | Task Populate, poll=%s type=%s id=%s index=%v", tpc.name, tpw.TaskName(), tpw.ID(), itemIdx)
-				go func() {
-					defer func() {
-						_ = utils.WrapErrorPure("Task population err", recover())
-						tpc.release(tpw)
-					}()
-					tpw.Yield(itemIdx, tpc)
-				}()
-				if tpc.interval > 0 {
-					time.Sleep(tpc.interval)
-				}
-			} else {
-				// extra sleep for over-populated punishment
-				time.Sleep(40 * time.Millisecond)
-			}
 		}
-		time.Sleep(10 * time.Millisecond)
+		if itemIdx, tpw := tpc.populate(); tpw != nil {
+			utils.DLogf("Task Poll | Task Populate, poll=%s type=%s id=%s index=%v", tpc.name, tpw.TaskName(), tpw.ID(), itemIdx)
+			go func() {
+				defer func() {
+					_ = utils.WrapErrorPure("Task population err", recover())
+					tpc.release(tpw)
+				}()
+				tpw.Yield(itemIdx, tpc)
+			}()
+			if tpc.interval > 0 {
+				time.Sleep(tpc.interval)
+			}
+			continue
+		}
+
+		drainTimer()
+		idleTimer.Reset(waitDuration)
+		select {
+		case <-sigTerm:
+			utils.DLog("task server shutted down.")
+			return
+		case <-tpc.wakeCh:
+			drainTimer()
+		case <-idleTimer.C:
+		}
 	}
 }
 
@@ -167,6 +204,7 @@ func (tpc *TPController) Push(item TaskPollItem) TaskPollItem {
 	tpc.taskPoll = append(tpc.taskPoll, &taskPollItemWrapper{
 		TaskPollItem: item,
 	})
+	tpc.signalWake()
 
 	return item
 }
@@ -192,6 +230,7 @@ func (tpc *TPController) Remove(id string, exitCode TPExitCode) {
 	defer tpc.pollLock.Unlock()
 
 	tpc.removeUnsafe(id, exitCode)
+	tpc.signalWake()
 }
 
 func NewTaskPollController(name string, concurrency uint, interval time.Duration, emptyWait time.Duration) *TPController {
@@ -202,5 +241,6 @@ func NewTaskPollController(name string, concurrency uint, interval time.Duration
 		emptyWait:   emptyWait,
 
 		runningTask: make(map[string]int),
+		wakeCh:      make(chan struct{}, 1),
 	}
 }

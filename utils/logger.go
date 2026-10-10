@@ -45,6 +45,9 @@ func LogTypeToStr(lt LogType) string {
 }
 
 func PrintLogUnit(lu *LogUnit) {
+	if lu == nil {
+		return
+	}
 	if lu.Type < VerboseLevel {
 		return
 	}
@@ -55,7 +58,14 @@ func PrintLogUnit(lu *LogUnit) {
 	}
 }
 
+func shouldLog(t LogType) bool {
+	return t >= VerboseLevel
+}
+
 func DBase(t LogType, a ...interface{}) *LogUnit {
+	if !shouldLog(t) {
+		return &LogUnit{Type: t}
+	}
 	currentTime := time.Now()
 	data := fmt.Sprintln(a...)
 	log := LogUnit{
@@ -69,6 +79,9 @@ func DBase(t LogType, a ...interface{}) *LogUnit {
 }
 
 func DBasef(t LogType, format string, a ...interface{}) *LogUnit {
+	if !shouldLog(t) {
+		return &LogUnit{Type: t}
+	}
 	return DBase(t, fmt.Sprintf(format, a...))
 }
 

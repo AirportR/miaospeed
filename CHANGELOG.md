@@ -1,4 +1,4 @@
-miaospeed v4.6.8
+MiaoSpeed v4.7.8
 
-1. 修复测速链接重定向时无法测速的问题
-
+1. 支持 Miu 出站代理协议
+2. 协议细节参考：https://github.com/MiuProtocol/Miu/blob/main/PROTOCOL.zh-CN.md

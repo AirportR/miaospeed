@@ -1,14 +1,32 @@
 name: build and releases
 on:
-  push:
-    branches:
-      - "build"
   workflow_dispatch:
-    
+  push:
+    # run only against tags
+    tags:
+      - '*'
 
 jobs:
   go-build:
+    name: build (${{ matrix.group }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - group: linux-x86
+            targets: linux-386.gz linux-amd64.gz linux-amd64-v3.gz
+          - group: linux-arm
+            targets: linux-armv5.gz linux-armv6.gz linux-armv7.gz linux-arm64.gz
+          - group: linux-mips
+            targets: linux-mips-softfloat.gz linux-mips-hardfloat.gz linux-mipsle-softfloat.gz linux-mipsle-hardfloat.gz linux-mips64.gz linux-mips64le.gz
+          - group: linux-other
+            targets: linux-riscv64.gz linux-loong64.gz
+          - group: darwin
+            targets: darwin-amd64.gz darwin-amd64-v3.gz darwin-arm64.gz
+          - group: freebsd
+            targets: freebsd-386.gz freebsd-amd64.gz freebsd-amd64-v3.gz freebsd-arm64.gz
+          - group: windows
+            targets: windows-386.zip windows-amd64.zip windows-amd64-v3.zip windows-arm64.zip
 
     steps:
       - name: Checkout repository
@@ -23,16 +41,160 @@ jobs:
           cache: true
 
       - name: fix embeded
+        env:
+          MIAOSPEED_CRT: ${{ secrets.MIAOSPEED_CRT }}
+          MIAOSPEED_KEY: ${{ secrets.MIAOSPEED_KEY }}
+          KOIPY_TLS_CRT: ${{ secrets.KOIPY_TLS_CRT }}
+          KOIPY_TLS_KEY: ${{ secrets.KOIPY_TLS_KEY }}
+          MS_BUILDTOKEN: ${{ secrets.MS_BUILDTOKEN }}
         run: |
           go env
-          mkdir ./preconfigs/embeded/miaokoCA
-          echo "${{ secrets.MIAOSPEED_CRT }}" > ./preconfigs/embeded/miaokoCA/miaoko.crt
-          echo "${{ secrets.MIAOSPEED_KEY }}" > ./preconfigs/embeded/miaokoCA/miaoko.key
-          echo "${{ secrets.MS_BUILDTOKEN }}" > ./utils/embeded/BUILDTOKEN.key
+          mkdir -p ./preconfigs/embeded/tls
+          # old
+          if [ -n "$MIAOSPEED_CRT" ] && [ -n "$MIAOSPEED_KEY" ]; then
+            printf '%s\n' "$MIAOSPEED_CRT" > ./preconfigs/embeded/tls/miaoko.crt
+            printf '%s\n' "$MIAOSPEED_KEY" > ./preconfigs/embeded/tls/miaoko.key
+          fi
+          # new
+          if [ -n "$KOIPY_TLS_CRT" ] && [ -n "$KOIPY_TLS_KEY" ]; then
+            printf '%s\n' "$KOIPY_TLS_CRT" > ./preconfigs/embeded/tls/miaospeed_tls.crt
+            printf '%s\n' "$KOIPY_TLS_KEY" > ./preconfigs/embeded/tls/miaospeed_tls.key
+          fi
+          if ! ls ./preconfigs/embeded/tls/*.crt >/dev/null 2>&1; then
+            echo "::error::preconfigs/embeded/tls 下没有任何 TLS 证书，请配置 MIAOSPEED_CRT/MIAOSPEED_KEY 或 KOIPY_TLS_CRT/KOIPY_TLS_KEY"
+            exit 1
+          fi
+          echo "$MS_BUILDTOKEN" > ./utils/embeded/BUILDTOKEN.key
           head -n 5 ./engine/embeded/default_geoip.js
 
-      - name: build
-        run: make releases
+      - name: build ${{ matrix.group }}
+        run: make ${{ matrix.targets }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.group }}
+          path: ./bin/*
+          if-no-files-found: error
+          retention-days: 1
+
+  android-apk:
+    name: build (android-apk)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # 完整历史，保证 gradle 里 git describe 能取到核心版本号
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: cache gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/.gradle/caches
+            android/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+          accept-android-sdk-licenses: 'true'
+
+      - name: accept sdk licenses
+        run: yes | sdkmanager --licenses > /dev/null
+
+      - name: install android sdk packages
+        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" > /dev/null
+
+      - name: fix embeded
+        env:
+          MIAOSPEED_CRT: ${{ secrets.MIAOSPEED_CRT }}
+          MIAOSPEED_KEY: ${{ secrets.MIAOSPEED_KEY }}
+          KOIPY_TLS_CRT: ${{ secrets.KOIPY_TLS_CRT }}
+          KOIPY_TLS_KEY: ${{ secrets.KOIPY_TLS_KEY }}
+          MS_BUILDTOKEN: ${{ secrets.MS_BUILDTOKEN }}
+        run: |
+          mkdir -p ./preconfigs/embeded/tls
+
+          if [ -n "$MIAOSPEED_CRT" ] && [ -n "$MIAOSPEED_KEY" ]; then
+            printf '%s\n' "$MIAOSPEED_CRT" > ./preconfigs/embeded/tls/miaoko.crt
+            printf '%s\n' "$MIAOSPEED_KEY" > ./preconfigs/embeded/tls/miaoko.key
+          fi
+
+          if [ -n "$KOIPY_TLS_CRT" ] && [ -n "$KOIPY_TLS_KEY" ]; then
+            printf '%s\n' "$KOIPY_TLS_CRT" > ./preconfigs/embeded/tls/miaospeed_tls.crt
+            printf '%s\n' "$KOIPY_TLS_KEY" > ./preconfigs/embeded/tls/miaospeed_tls.key
+          fi
+
+          if ! ls ./preconfigs/embeded/tls/*.crt >/dev/null 2>&1; then
+            echo "::error::preconfigs/embeded/tls 下没有任何 TLS 证书，请配置 MIAOSPEED_CRT/MIAOSPEED_KEY 或 KOIPY_TLS_CRT/KOIPY_TLS_KEY"
+            exit 1
+          fi
+          echo "$MS_BUILDTOKEN" > ./utils/embeded/BUILDTOKEN.key
+
+      - name: restore signing key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            if ! printf '%s' "$KS_B64" | tr -d ' \t\r\n' | base64 -d > android/keystore.jks; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 不是合法 base64"
+              exit 1
+            fi
+            if [ ! -s android/keystore.jks ]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 请确认该 secret 已正确设置"
+              exit 1
+            fi
+            printf 'storeFile=keystore.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$KS_PASS" "$KS_ALIAS" "$KS_PASS" > android/keystore.properties
+          else
+            echo "No keystore secrets configured, APK will fall back to debug signing"
+          fi
+
+      - name: build apk
+        run: make android-apk
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-android
+          path: ./bin/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: [go-build, android-apk]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get the tag
+        run: echo "The tag is ${{ github.ref_name }}"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: ./bin
+          merge-multiple: true
 
       - name: Release to current repository
         uses: softprops/action-gh-release@v2
@@ -51,6 +213,14 @@ jobs:
           tag_name: ${{ github.ref_name }}
           repository: AirportR/miaospeed
           token: ${{ secrets.MIAOSPEED_REPO_TOKEN }}
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: publish-release
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Get the tag
         run: |

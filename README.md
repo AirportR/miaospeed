@@ -18,7 +18,7 @@
 
 ## 简介
 
-⚠️ 本分支为 fork，原仓库作者已不再维护。
+miaospeed的维护分支，原仓库作者已不再维护。
 
 miaospeed 是一个使用 Go 编写的代理服务器性能测试解决方案。
 
@@ -30,8 +30,19 @@ miaospeed 是一个使用 Go 编写的代理服务器性能测试解决方案。
 - 支持主流出站代理协议：Shadowsocks、Vmess、VLESS、Trojan、Hysteria2、AnyTLS 等。
 - 丰富的测试参数配置，支持自定义请求体、超时、并发数等。
 - 支持自定义 JavaScript 测试脚本，可实现自定义测试逻辑。
+- 支持反向连接：后端位于 NAT 后没有公网时，可主动外连到有公网的客户端，支持同时外连多个端点，连接池可经控制连接动态调整。
 
 ## 基本用法
+
+### 管理脚本
+
+仓库提供了 `miaospeed.sh`，用于在Linux上交互式安装、配置、启动、停止、查看日志和卸载 miaospeed。
+
+大部分Linux 发行版可使用以下命令一键启动交互式安装：
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/AirportR/miaospeed/master/miaospeed.sh -o /tmp/miaospeed.sh && bash /tmp/miaospeed.sh
+```
 
 ### 预编译二进制
 
@@ -54,9 +65,10 @@ miaospeed 是一个使用 Go 编写的代理服务器性能测试解决方案。
 由于 miaospeed 最初与闭源项目 miaoko 搭配使用，因此部分证书与脚本未开源。您需要补齐以下文件以成功编译:
 
 1. `./utils/embeded/BUILDTOKEN.key`: 这是 `编译TOKEN`，用于给 miaospeed 的 单次测试请求 结构体签名，避免客户端以非标准方式使用 miaospeed 导致数据真实性争议。您可以随便定义它，例如: `1111|2222|33333333`，不同段用 `|` 切开。
-2. `./preconfigs/embeded/miaokoCA/miaoko.crt`: 当 `-mtls` 启用时，miaospeed 会读取这里的证书让客户端做 TLS 验证。
-3. `./preconfigs/embeded/miaokoCA/miaoko.key`: 同上，这是私钥。(对于这两个您可以自己用 openssl 签一个证书，但它不能用于 miaoko。)
-4. `./preconfigs/embeded/ca-certificates.crt`: miaospeed 自带的根证书集，防止有恶意用户修改系统更证书以作假 TLS RTT。（对于 debian 用户，您可以在安装 `ca-certificates` 包后，在 `/etc/ssl/certs/ca-certificates.crt` 获取这个文件）
+2. `./preconfigs/embeded/tls/`: 内嵌的 TLS 证书目录，整个目录会被编译进二进制。**编译时这里至少要有一对 `.crt` / `.key`，否则编译直接失败**。文件名随意，同名的 `.crt` 与 `.key` 配对即可：
+   - `miaoko.crt` / `miaoko.key`: 旧版内嵌证书。当 `-mtls` 启用时，miaospeed 会用它让客户端做 TLS 验证。(已过时的名称，仅作兼容适配，请使用下面的代替)
+   - `miaospeed_tls.crt` / `miaospeed_tls.key`: 新版内嵌证书的约定名称（`适用于koipy`）。
+3. `./preconfigs/embeded/ca-certificates.crt`: miaospeed 自带的根证书集，防止有恶意用户修改系统更证书以作假 TLS RTT。（对于 debian 用户，您可以在安装 `ca-certificates` 包后，在 `/etc/ssl/certs/ca-certificates.crt` 获取这个文件）
 
 以下为可选文件：
 
@@ -65,6 +77,22 @@ miaospeed 是一个使用 Go 编写的代理服务器性能测试解决方案。
 3. `./engine/embeded/default_ip.js`: 默认的 `ip_resolve` 脚本，需要提供一个 `ip_resolve_default()` 入口函数，用于获取入口、出口的 IP。默认geoip脚本已提供，您也可以自行修改。
 
 当您新建好以上文件后，就可以运行 `go build .` 构建 `miaospeed` 了。
+
+
+### 反向连接
+
+正常模式下 miaospeed 作为服务端监听端口，等待客户端（面板）主动连接。当 miaospeed 所在机器**没有公网**而客户端有公网时，可以让 miaospeed **主动外连**客户端：
+
+```shell
+./miaospeed server -connect wss://panel.example.com/reverse -token YOUR_TOKEN
+```
+
+`-connect` 可以重复传入，也可以用逗号分隔，让一个后端同时服务多个端点：
+
+```shell
+./miaospeed server -connect wss://a.example.com/reverse -connect wss://b.example.com/reverse -token YOUR_TOKEN
+./miaospeed server -connect wss://a.example.com/reverse,wss://b.example.com/reverse -token YOUR_TOKEN
+```
 
 ### 预编译二进制说明
 
@@ -87,10 +115,11 @@ MIAOKO4|580JxAo049R|GEnERAl|1X571R930|T0kEN
 5. 发送完成签名后的请求，您就可以接收返回值了。服务器返回的结构体统一为 https://github.com/AirportR/miaospeed/blob/fd7abecc2d36a0f18b08f048f9a53b7c0a26bd9e/interfaces/api_response.go#L28
 
 
-## 主要客户端实现
-由于 miaospeed 的大部分功能体现为后端服务，因此需要自行实现客户端。可参考以下实现：
+## 客户端实现
+由于 miaospeed 的大部分功能体现为服务端，因此需要自行实现客户端。可参考以下实现：
 * miaoko (闭源) 项目地址：无
 * koipy (初版开源，后续闭源) [项目地址](https://github.com/koipy-org/koipy) [项目文档](https://koipy.gitbook.io/koipy)
+* Waku (闭源商用) [参考文档](https://scx.gitbook.io/)
 
 如未来有其他客户端实现，欢迎贡献。
 ## 版权与协议
@@ -102,7 +131,7 @@ miaospeed 采用 AGPLv3 协议开源，您可以按照 AGPLv3 协议对 miaospee
 miaospeed 采用了如下的开源项目:
 
 - Dreamacro/clash [GPLv3]
-- MetaCubeX/Clash.Meta [GPLv3]
+- MetaCubeX/mihomo [GPLv3]
 - juju/ratelimit [LGPLv3]
 - dop251/goja [MIT]
 - json-iterator/go [MIT]

@@ -1,7 +1,6 @@
 package script
 
 import (
-	"runtime"
 	"time"
 
 	"github.com/airportr/miaospeed/engine"
@@ -42,7 +41,6 @@ func ExecScript(p interfaces.Vendor, script *interfaces.Script) interfaces.Scrip
 	}
 
 	vm = nil
-	runtime.GC()
 
 	return s
 }
@@ -78,7 +76,6 @@ func FormatExtraMatriceScriptResult(script string, matrix interfaces.SlaveReques
 	}
 
 	vm = nil
-	runtime.GC()
 
 	return s
 }

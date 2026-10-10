@@ -1,25 +1,18 @@
 package speed
 
-import "sync"
+import "sync/atomic"
 
 type WriteCounter struct {
-	Total     uint64
+	Total     atomic.Uint64
 	RateLimit int64
-	Lock      sync.Mutex
 }
 
 func (wc *WriteCounter) Write(p []byte) (int, error) {
 	n := len(p)
-	wc.Lock.Lock()
-	wc.Total += uint64(n)
-	wc.Lock.Unlock()
+	wc.Total.Add(uint64(n))
 	return n, nil
 }
 
 func (wc *WriteCounter) Take() uint64 {
-	wc.Lock.Lock()
-	t := wc.Total
-	wc.Total = 0
-	wc.Lock.Unlock()
-	return t
+	return wc.Total.Swap(0)
 }

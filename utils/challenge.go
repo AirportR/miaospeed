@@ -28,6 +28,14 @@ func hashMiaoSpeed(token, request string) string {
 	return base64.URLEncoding.EncodeToString(hasher.Sum(nil))
 }
 
+// SignChallenge signs an arbitrary payload with the given token. It backs
+// the reverse-connection handshake, where both sides must produce the same
+// signature to prove they share the token (mixed with the embedded
+// BUILDTOKEN, see hashMiaoSpeed).
+func SignChallenge(token string, payload string) string {
+	return hashMiaoSpeed(token, payload)
+}
+
 //func hashMd5(token string) string {
 //	hasher := md5.New()
 //	hasher.Write([]byte(token))
@@ -65,7 +73,7 @@ func SignRequest(token string, req *interfaces.SlaveRequest) string {
 		awaitSignedStr, _ := jsoniter.MarshalToString(&awaitSigned)
 		awaitSignedStr = strings.TrimSpace(awaitSignedStr)
 		return hashMiaoSpeed(token, awaitSignedStr)
-	} else {
-		return RandomUUID() // 不应该执行到此分支
 	}
+
+	return RandomUUID() // 不应该执行到此分支
 }
