@@ -159,4 +159,4 @@ require (
 
 replace github.com/miaokobot/miaospeed v0.0.0-20230313132009-0234a01d9daa => github.com/airportr/miaospeed v0.0.2
 
-replace github.com/metacubex/mihomo => github.com/AirportR/mihomo v1.19.33-x365-miu.1
+replace github.com/metacubex/mihomo => github.com/AirportR/mihomo v1.19.33-x365-miu.2
