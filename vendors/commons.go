@@ -296,6 +296,12 @@ func NetCat(ctx context.Context, p interfaces.Vendor, addr string, data []byte, 
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			return buf.Bytes(), nil
 		}
+		// Some transports (e.g. AnyTLS) report a peer-initiated close as
+		// net.ErrClosed instead of io.EOF. Everything the peer sent has
+		// already been read, so treat it as a normal end of stream.
+		if buf.Len() > 0 && errors.Is(err, net.ErrClosed) {
+			return buf.Bytes(), nil
+		}
 		return nil, err
 	}
 
